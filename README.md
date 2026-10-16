@@ -10,23 +10,38 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
 
 ## Status
 
-Through M9: load multiple stems, see their waveforms stacked with a shared
-grid, drag anchors on the reference stem to reposition the grid, run
-automatic BPM/beat detection ("Detect"), see non-blocking warnings when
-stems' sample rate/length/offset look inconsistent, propose cross-correlation
-based start offsets ("Detect offsets" — always a proposal you confirm, never
-applied automatically), mute/solo per stem, toggle a diagnostic "Show drift"
-overlay that marks where a stem's own transients stray from the shared grid
-without ever correcting it, add/remove anchors for tracks with tempo drift,
-play the mixed stems back with mute/solo respected, a sample-accurate
-metronome click and a synced playhead, save/open the full project
-(`.beatgrid`), export the grid as JSON (schema in `docs/EXPORT_SCHEMA.md`),
-and warp all stems to a fixed tempo ("Warp..." — written to
-`<stem_dir>/warped/`, never touching the originals, with a choice of engine:
-**rubberband-timemap**, the default production engine, native
-phase-continuous piecewise warping in one pass; or **pedalboard**, the M8
-prototype, constant-ratio-per-segment with crossfaded splices). See the
-license trade-off between the two engines in `PLAN.md`.
+Through M10: load multiple stems, see their waveforms stacked with a shared
+grid (rendered from a multi-resolution peak pyramid, so zooming stays cheap
+even on long files), drag anchors on the reference stem to reposition the
+grid, run automatic BPM/beat detection ("Detect"), see non-blocking warnings
+when stems' sample rate/length/offset look inconsistent, propose
+cross-correlation based start offsets ("Detect offsets" — always a proposal
+you confirm, never applied automatically), mute/solo per stem, toggle a
+diagnostic "Show drift" overlay that marks where a stem's own transients
+stray from the shared grid without ever correcting it, add/remove anchors
+for tracks with tempo drift, undo/redo any edit, play the mixed stems back
+with mute/solo respected, a sample-accurate metronome click and a synced
+playhead, save/open the full project (`.beatgrid`), export the grid as JSON
+(schema in `docs/EXPORT_SCHEMA.md`), and warp all stems to a fixed tempo
+("Warp..." — written to `<stem_dir>/warped/`, never touching the originals,
+with a choice of engine: **rubberband-timemap**, the default production
+engine, native phase-continuous piecewise warping in one pass; or
+**pedalboard**, the M8 prototype, constant-ratio-per-segment with crossfaded
+splices). See the license trade-off between the two engines in `PLAN.md`.
+
+### Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+O` | Open project |
+| `Ctrl+S` | Save project |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Shift+Z` | Redo |
+| `Delete` | Remove the selected anchor |
+| `Space` | Play / pause |
+
+Click an anchor on the reference stem's row to select it (the BPM field and
+nudge buttons act on whichever anchor is selected).
 
 ## Running the app
 
@@ -76,6 +91,27 @@ uv sync --extra core --extra gui --extra dev
 uv run pytest
 uv run ruff check .
 ```
+
+## Packaging
+
+`packaging/beatgrid.spec` is a [PyInstaller](https://pyinstaller.org) spec for
+a standalone executable:
+
+```bash
+uv sync --extra core --extra gui --extra dev --extra package  # add --extra warp(-prototype) if wanted
+uv run pyinstaller packaging/beatgrid.spec --distpath packaging/dist
+```
+
+Read the comment at the top of that file before building with either warp
+extra installed — including `pedalboard` makes the *distributed executable*
+GPL-3.0-obligated as a whole (it statically links Rubber Band/FFTW/JUCE),
+while `pyrubberband` doesn't have that problem (it only shells out to a
+separately-installed `rubberband-cli`, which stays external even in a build).
+A trial run (with every extra installed, including PyTorch) completed
+PyInstaller's full dependency analysis and archive packaging without errors
+— only the usual benign "missing optional module" noise every numpy/scipy/
+torch build produces — but wasn't taken all the way through final linking and
+a launch smoke-test, so treat it as promising rather than verified.
 
 ## License
 

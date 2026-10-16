@@ -48,6 +48,12 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
 ]
+# Only needed to build a standalone executable (packaging/beatgrid.spec) —
+# not a runtime dependency. See that file for the GPL implications of
+# building with the warp-prototype extra installed.
+package = [
+    "pyinstaller>=6.0",
+]
 
 [project.scripts]
 beatgrid = "beatgrid.cli:main"

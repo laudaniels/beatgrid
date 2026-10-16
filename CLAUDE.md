@@ -56,7 +56,66 @@ milestones — read it before making architectural changes.
 
 - `beat-this` and `librosa` are MIT/ISC — no concerns.
 - The warp engines are GPL-exposed by design (see `PLAN.md`): `pedalboard`
-  (M8 prototype) is GPL-3.0 as a whole; `pyrubberband` (M9 production) shells
-  out to a separately-installed `rubberband-cli` binary (subprocess, "mere
-  aggregation", lower risk for our own MIT code). Don't bundle either into a
-  distributed executable (M10 packaging) without re-reading that trade-off.
+  (M8 prototype) is GPL-3.0 as a whole; `pyrubberband` (M9 production, the
+  default engine) shells out to a separately-installed `rubberband-cli`
+  binary (subprocess, "mere aggregation", lower risk for our own MIT code).
+  Don't bundle either into a distributed executable (`packaging/beatgrid.spec`)
+  without re-reading that trade-off — it's documented again at the top of
+  the spec file itself.
+
+## Lessons learned (M0–M10)
+
+- **Verify third-party APIs empirically before writing wrapper code.**
+  Beat This!'s `Audio2Beats` interface, `pedalboard.time_stretch`'s channel
+  shape (it wants `(channels, samples)`, not a flat 1D array — a flat array
+  silently gives a 1-sample output instead of erroring) and
+  `pyrubberband.pyrb.timemap_stretch`'s `(source_sample, target_sample)`
+  keyframe convention were all confirmed by running them against real audio
+  in a scratch script first. Guessing the shape/convention from docs alone
+  would have cost more time than the empirical check.
+- **Real audio content finds bugs synthetic fixtures don't.** Several of the
+  most important fixes in this project (listed below) only surfaced once
+  real multi-stem content was loaded through the actual app, not from the
+  synthetic `tests/fixtures.py` data. When a milestone touches detection,
+  playback, or rendering, do a manual pass with real stems before calling it
+  done, even though the repo's committed tests stay synthetic-only.
+- **Beat index continuity needs to be derived from one source of truth.**
+  `BeatGrid.generate_beats()` originally re-derived each segment's beat count
+  from a time cutoff independently of `renumber_anchors()`'s beat-index
+  bookkeeping; rounding disagreements between the two caused duplicate/
+  skipped beat indices right at segment boundaries. Fixed by always deriving
+  a non-last segment's beat count from `next_anchor.beat_index -
+  anchor.beat_index` — never re-derive the same count two different ways.
+- **`sounddevice`'s `finished_callback` runs on the PortAudio audio thread,
+  not the GUI thread.** Closing the stream from inside that callback (even
+  indirectly) caused a `pthread_join` self-join error; closing the stream
+  that just finished (via a stale reference) after a new one had already
+  started caused an `AttributeError` race. Fix: grab-and-clear the stream
+  reference atomically in `stop()`, match the specific stream instance in
+  the finished callback via a closure, and only ever call
+  `cleanup_finished_stream()` from the main thread (driven by the playhead
+  `QTimer`), never from the callback itself.
+- **Undo/redo: push the snapshot after validation, not before.** Several
+  `ProjectController` mutators originally called `_push_undo()` before
+  checking whether the target anchor/stem id existed, so a failed (raising)
+  call still polluted the undo stack with a no-op entry. Validate first,
+  then snapshot, then mutate.
+- **When slicing a precomputed pyramid/cache for a viewport, slice before
+  converting, not after.** `WaveformItem` first converted the *entire*
+  chosen peak-pyramid level to draw points before trimming to the visible
+  x-range, which meant zooming into a short section of a long file still
+  built millions of points every redraw. Slice `mins`/`maxs` to the visible
+  bucket range first, convert only that slice, then offset its x-values by
+  the slice's start.
+- **A rejected/interrupted tool call can still have run partially.** A
+  `pyinstaller` invocation that was rejected mid-command had already
+  completed its Analysis and PYZ phases before being killed, leaving a
+  multi-GB `packaging/build/` directory on disk. After any interrupted
+  build/long-running command, check for and clean up partial artifacts
+  rather than assuming nothing happened.
+- **Don't build a real executable unless asked.** Packaging polish (M10)
+  only needed a correct, well-documented PyInstaller `.spec` — the user
+  explicitly didn't want an actual build/exe produced in-session ("vergeet
+  de exe maar, als het kan draaien in Linux is prima"). Running the app
+  normally via `uv run python -m beatgrid.gui.app` on Linux was the bar, not
+  a compiled binary.
