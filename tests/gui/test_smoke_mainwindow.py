@@ -422,6 +422,28 @@ def test_save_then_open_project_restores_grid_state(qtbot, tmp_path, monkeypatch
     assert bass_stem.muted is True
 
 
+def test_load_stems_shows_warning_on_failure_instead_of_crashing(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    bad_path = tmp_path / "corrupt.wav"
+    bad_path.write_bytes(b"not actually audio")
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QFileDialog.getOpenFileNames",
+        lambda *a, **k: ([str(bad_path)], ""),
+    )
+    warned = []
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QMessageBox.warning",
+        lambda *a, **k: warned.append(True),
+    )
+
+    window._on_load_stems()  # must not raise
+
+    assert warned == [True]
+    assert window.controller is None  # load never completed
+
+
 def test_open_project_shows_warning_on_failure(qtbot, tmp_path, monkeypatch):
     window = MainWindow()
     qtbot.addWidget(window)

@@ -186,8 +186,12 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Load stems", "", "Audio files (*.wav *.flac *.mp3)"
         )
-        if paths:
+        if not paths:
+            return
+        try:
             self.load_stems([Path(p) for p in paths])
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+            QMessageBox.warning(self, "Could not load stems", str(exc))
 
     def load_stems(self, paths: list[Path]) -> None:
         """Load the given audio files as stems of a new project: one default
