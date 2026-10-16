@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QWidget,
+)
 
 NUDGE_MS_STEPS = (-10.0, -1.0, 1.0, 10.0)
 NUDGE_SAMPLE_STEPS = (-1, 1)
 
 
 class TransportBar(QWidget):
-    """BPM and nudge (ms/sample) controls for the current anchor. Play/pause
-    and the metronome toggle are added here in M6."""
+    """Play/pause, metronome toggle, BPM and nudge (ms/sample) controls for
+    the current anchor."""
 
     bpm_changed = Signal(float)
     nudge_requested = Signal(float)  # delta seconds, positive = later
+    play_toggled = Signal(bool)  # True = play requested, False = stop requested
+    metronome_toggled = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -20,6 +29,16 @@ class TransportBar(QWidget):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
+
+        self.play_button = QPushButton("Play")
+        self.play_button.setCheckable(True)
+        self.play_button.toggled.connect(self._on_play_toggled)
+        layout.addWidget(self.play_button)
+
+        self.metronome_checkbox = QCheckBox("Metronome")
+        self.metronome_checkbox.setChecked(True)
+        self.metronome_checkbox.toggled.connect(self.metronome_toggled.emit)
+        layout.addWidget(self.metronome_checkbox)
 
         layout.addWidget(QLabel("BPM:"))
         self.bpm_spinbox = QDoubleSpinBox()
@@ -59,3 +78,15 @@ class TransportBar(QWidget):
 
     def set_sample_rate(self, sample_rate: int) -> None:
         self._sample_rate = sample_rate
+
+    def _on_play_toggled(self, checked: bool) -> None:
+        self.play_button.setText("Pause" if checked else "Play")
+        self.play_toggled.emit(checked)
+
+    def set_playing(self, playing: bool) -> None:
+        """Sync the button's visual state without re-emitting play_toggled —
+        used when playback stops on its own (end of track)."""
+        self.play_button.blockSignals(True)
+        self.play_button.setChecked(playing)
+        self.play_button.setText("Pause" if playing else "Play")
+        self.play_button.blockSignals(False)

@@ -314,3 +314,90 @@ def test_detect_action_shows_warning_on_failure(qtbot, tmp_path, monkeypatch):
     window._on_detect()  # must not raise or crash
 
     assert window.controller.project.grid.anchors[0].bpm == original_bpm
+
+
+def test_loading_stems_creates_a_player_with_stems_and_metronome(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    assert window._audio_player is not None
+    assert window._audio_player.metronome is not None  # on by default
+
+
+def test_play_toggle_starts_and_stops_player_without_opening_a_real_device(
+    qtbot, tmp_path, monkeypatch
+):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    calls = []
+    monkeypatch.setattr(window._audio_player, "play", lambda: calls.append("play"))
+    monkeypatch.setattr(window._audio_player, "stop", lambda: calls.append("stop"))
+
+    window.transport_bar.play_button.setChecked(True)
+    assert calls == ["play"]
+    assert window.transport_bar.play_button.text() == "Pause"
+    assert window._playhead_timer.isActive()
+
+    window.transport_bar.play_button.setChecked(False)
+    assert calls == ["play", "stop"]
+    assert window.transport_bar.play_button.text() == "Play"
+    assert not window._playhead_timer.isActive()
+
+
+def test_metronome_checkbox_enables_and_disables_click(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    window.transport_bar.metronome_checkbox.setChecked(False)
+    assert window._audio_player.metronome is None
+
+    window.transport_bar.metronome_checkbox.setChecked(True)
+    assert window._audio_player.metronome is not None
+
+
+def test_mute_solo_changes_propagate_to_the_player(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    window.track_views["kick"].stem_panel.mute_checkbox.setChecked(True)
+
+    from beatgrid.gui.playback.audio_player import select_active_stems
+
+    active_ids = {s.stem_id for s in select_active_stems(window._audio_player.stems)}
+    assert active_ids == {"bass"}
+
+
+def test_update_playhead_positions_accounts_for_stem_offset(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    kick_stem = next(s for s in window.controller.project.stems if s.id == "kick")
+    window._controller.set_stem_offset("bass", 0.1)
+    window._audio_player.seek(0.5)
+
+    window._update_playhead_positions()
+
+    assert window.track_views["kick"].playhead_time == pytest.approx(
+        0.5 - kick_stem.start_offset_sec
+    )
+    assert window.track_views["bass"].playhead_time == pytest.approx(0.4)
+
+
+def test_playhead_tick_stops_itself_when_player_is_not_playing(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    window.transport_bar.set_playing(True)  # simulate UI state without really playing
+    window._playhead_timer.start()
+
+    window._on_playhead_tick()  # _audio_player.is_playing is False: .play() was never called
+
+    assert window.transport_bar.play_button.isChecked() is False
+    assert not window._playhead_timer.isActive()

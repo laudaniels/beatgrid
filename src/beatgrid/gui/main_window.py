@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -24,9 +24,11 @@ from beatgrid.audio.validation import validate_stems
 from beatgrid.detection.refine import propose_anchor
 from beatgrid.detection.registry import available_detectors, get_detector
 from beatgrid.detection.transient import compute_drift, detect_transients
-from beatgrid.grid.model import Anchor, BeatGrid, TimeSignature
+from beatgrid.grid.model import Anchor, Beat, BeatGrid, TimeSignature
 from beatgrid.grid.timeline import project_time_to_stem_time
 from beatgrid.gui.controllers.project_controller import ProjectController
+from beatgrid.gui.playback.audio_player import AudioPlayer, PlaybackStem
+from beatgrid.gui.playback.metronome import build_metronome
 from beatgrid.gui.widgets.anchor_item import AnchorItem
 from beatgrid.gui.widgets.stem_track_view import StemTrackView
 from beatgrid.gui.widgets.transport_bar import TransportBar
@@ -34,6 +36,7 @@ from beatgrid.project.models import Project, Stem
 
 DEFAULT_BPM = 120.0
 DRIFT_THRESHOLD_SEC = 0.02
+PLAYHEAD_TIMER_INTERVAL_MS = 33  # ~30Hz
 
 
 class MainWindow(QMainWindow):
@@ -48,6 +51,11 @@ class MainWindow(QMainWindow):
         self._transients_by_stem: dict[str, list[float]] = {}
         self._show_drift = False
         self._selected_anchor_id: str | None = None
+        self._audio_player: AudioPlayer | None = None
+
+        self._playhead_timer = QTimer(self)
+        self._playhead_timer.setInterval(PLAYHEAD_TIMER_INTERVAL_MS)
+        self._playhead_timer.timeout.connect(self._on_playhead_tick)
 
         self._build_toolbar()
         self._build_central_widget()
@@ -118,6 +126,8 @@ class MainWindow(QMainWindow):
         self.transport_bar = TransportBar()
         self.transport_bar.bpm_changed.connect(self._on_bpm_changed)
         self.transport_bar.nudge_requested.connect(self._on_nudge)
+        self.transport_bar.play_toggled.connect(self._on_play_toggled)
+        self.transport_bar.metronome_toggled.connect(self._on_metronome_toggled)
 
         wrapper = QWidget()
         wrapper_layout = QVBoxLayout(wrapper)
@@ -170,10 +180,16 @@ class MainWindow(QMainWindow):
 
         warnings = validate_stems(stems, reference_stem_id=project.reference_stem_id)
 
+        if self._audio_player is not None:
+            self._audio_player.stop()
+        self._playhead_timer.stop()
+        self.transport_bar.set_playing(False)
+
         self._audio = audio_by_id
         self._transients_by_stem = {}
         self._show_drift = False
         self._selected_anchor_id = grid.anchors[0].id
+        self._audio_player = AudioPlayer(sample_rate=grid.sample_rate)
         self.drift_action.blockSignals(True)
         self.drift_action.setChecked(False)
         self.drift_action.blockSignals(False)
@@ -250,6 +266,32 @@ class MainWindow(QMainWindow):
         if selected_anchor is not None:
             self.transport_bar.set_bpm(selected_anchor.bpm)
         self.transport_bar.set_sample_rate(reference_stem.sample_rate)
+
+        self._refresh_player(beats)
+
+    def _refresh_player(self, beats: list[Beat]) -> None:
+        if self._audio_player is None:
+            return
+        project = self._controller.project
+        reference_stem = project.reference_stem()
+
+        playback_stems = [
+            PlaybackStem(
+                stem_id=stem.id,
+                audio=self._audio[stem.id].audio,
+                start_offset_sec=stem.start_offset_sec,
+                muted=stem.muted,
+                solo=stem.solo,
+            )
+            for stem in project.stems
+        ]
+        self._audio_player.set_stems(playback_stems)
+        self._audio_player.set_duration(reference_stem.duration_sec)
+
+        if self.transport_bar.metronome_checkbox.isChecked():
+            self._audio_player.set_metronome(build_metronome(beats, reference_stem.sample_rate))
+        else:
+            self._audio_player.set_metronome(None)
 
     def _find_anchor(self, anchor_id: str | None) -> Anchor | None:
         if self._controller is None or anchor_id is None:
@@ -453,3 +495,46 @@ class MainWindow(QMainWindow):
             return fallback_bpm
         finally:
             QApplication.restoreOverrideCursor()
+
+    def _on_play_toggled(self, play: bool) -> None:
+        if self._audio_player is None:
+            return
+        if play:
+            self._audio_player.play()
+            self._playhead_timer.start()
+        else:
+            self._audio_player.stop()
+            self._playhead_timer.stop()
+
+    def _on_metronome_toggled(self, enabled: bool) -> None:
+        if self._controller is None or self._audio_player is None:
+            return
+        if not enabled:
+            self._audio_player.set_metronome(None)
+            return
+        project = self._controller.project
+        reference_stem = project.reference_stem()
+        beats = project.grid.generate_beats(end_time_sec=reference_stem.duration_sec)
+        self._audio_player.set_metronome(build_metronome(beats, reference_stem.sample_rate))
+
+    def _on_playhead_tick(self) -> None:
+        if self._controller is None or self._audio_player is None:
+            return
+        if not self._audio_player.is_playing:
+            # the track reached the end on its own -- sync the button state
+            # and close the now-finished stream (must happen on this thread,
+            # see AudioPlayer.cleanup_finished_stream)
+            self._audio_player.cleanup_finished_stream()
+            self.transport_bar.set_playing(False)
+            self._playhead_timer.stop()
+            return
+        self._update_playhead_positions()
+
+    def _update_playhead_positions(self) -> None:
+        assert self._controller is not None
+        assert self._audio_player is not None
+        project_time = self._audio_player.position_sec
+        for stem in self._controller.project.stems:
+            view = self._track_views.get(stem.id)
+            if view is not None:
+                view.set_playhead(project_time_to_stem_time(project_time, stem))

@@ -44,6 +44,12 @@ class StemTrackView(QWidget):
         self.grid_overlay = GridOverlay(self.plot_widget.getPlotItem())
         self.drift_overlay = DriftOverlay(self.plot_widget.getPlotItem())
 
+        self._playhead = pg.InfiniteLine(
+            pos=0.0, angle=90, movable=False, pen=pg.mkPen("w", width=1)
+        )
+        self._playhead.setZValue(10)
+        self.plot_widget.addItem(self._playhead, ignoreBounds=True)
+
     @property
     def stem(self) -> Stem:
         return self._stem
@@ -68,3 +74,10 @@ class StemTrackView(QWidget):
         for item in self._anchor_items:
             self.plot_widget.removeItem(item)
         self._anchor_items.clear()
+
+    def set_playhead(self, local_time_sec: float) -> None:
+        self._playhead.setPos(local_time_sec)
+
+    @property
+    def playhead_time(self) -> float:
+        return float(self._playhead.value())
