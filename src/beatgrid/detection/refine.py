@@ -24,7 +24,28 @@ def propose_anchor(
         snap_to_nearest_transient(t, transients, max_distance_sec=snap_tolerance_sec)
         for t in beat_times
     ]
-    return fit_anchor_and_bpm(refined_times, list(range(len(refined_times))))
+    return fit_anchor_and_bpm(refined_times, _infer_beat_indices(refined_times))
+
+
+def _infer_beat_indices(beat_times: Sequence[float]) -> list[int]:
+    """Beat indices robust to the detector occasionally dropping a beat (e.g.
+    during a quiet section): naively assuming index == position in the list
+    misaligns every later beat once one is missing. Instead, the median
+    interval between consecutive detected beats estimates the true beat
+    length, and each gap is rounded to the nearest whole number of beats."""
+    if len(beat_times) < 2:
+        return list(range(len(beat_times)))
+
+    diffs = np.diff(beat_times)
+    typical_interval = float(np.median(diffs))
+    if typical_interval <= 0:
+        return list(range(len(beat_times)))
+
+    indices = [0]
+    for diff in diffs:
+        step = max(1, round(diff / typical_interval))
+        indices.append(indices[-1] + step)
+    return indices
 
 
 def fit_anchor_and_bpm(
