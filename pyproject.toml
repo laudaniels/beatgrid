@@ -1,0 +1,68 @@
+[project]
+name = "beatgrid"
+version = "0.1.0"
+description = "Visual beatgrid editor for multi-stem tracks, with optional warp/time-stretch rendering."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Lau Daniels", email = "102807459+laudaniels@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "soundfile>=0.12",
+]
+
+[project.optional-dependencies]
+# Beat detection: Beat This! (primary) + librosa (fallback). Heavier install
+# (PyTorch) — see README prerequisites.
+core = [
+    "librosa>=0.10",
+    "beat-this>=0.1",
+]
+# Desktop GUI: PySide6 + pyqtgraph, sounddevice for playback.
+gui = [
+    "PySide6>=6.6",
+    "pyqtgraph>=0.13",
+    "sounddevice>=0.5",
+    "pytest-qt>=4.4",
+]
+# Variant B prototype engine (M8). GPL-3.0 as a whole (bundles Rubber Band) —
+# see PLAN.md license trade-off.
+warp-prototype = [
+    "pedalboard>=0.9",
+]
+# Variant B production engine (M9). Requires the rubberband-cli system binary
+# to be installed separately (apt/brew) — see README prerequisites.
+warp = [
+    "pyrubberband>=0.3",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+beatgrid = "beatgrid.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Markdown docs (PLAN.md, README.md, ...) contain illustrative/pseudocode
+# snippets, not real source — don't lint/format those as Python.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gui: tests that require a Qt platform plugin (offscreen in CI)",
+    "requires_rubberband: tests that require the rubberband-cli binary to be installed",
+]

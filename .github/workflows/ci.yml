@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test-core:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Extend with `--extra core` (Beat This!/librosa) and `--extra warp` once
+      # the corresponding tests land (M3, M9); M9 also needs `apt-get install
+      # rubberband-cli` for tests/test_warp_renderer_rubberband.py.
+      - run: uv sync --extra dev
+      - run: uv run pytest -m "not gui"
+
+  # test-gui job (pytest-qt, QT_QPA_PLATFORM=offscreen, apt Qt runtime libs)
+  # is added once tests/gui/ has real tests (M2).
