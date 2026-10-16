@@ -25,10 +25,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # Extend with `--extra core` (Beat This!/librosa) and `--extra warp` once
-      # the corresponding tests land (M3, M9); M9 also needs `apt-get install
-      # rubberband-cli` for tests/test_warp_renderer_rubberband.py.
-      - run: uv sync --extra dev
+      # Extend with `--extra warp` once M9 lands; that also needs
+      # `apt-get install rubberband-cli` for test_warp_renderer_rubberband.py.
+      - name: Cache Beat This! model checkpoint
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/torch/hub/checkpoints
+          key: torch-hub-beat-this-${{ runner.os }}
+      - run: uv sync --extra core --extra dev
       - run: uv run pytest -m "not gui"
 
   test-gui:

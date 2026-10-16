@@ -10,23 +10,29 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
 
 ## Status
 
-MVP (M2): load multiple stems, see their waveforms stacked with a shared
-grid, and drag one anchor on the reference stem to reposition the whole grid.
-No automatic detection, playback, or multi-anchor support yet — see the
-milestones in `PLAN.md`.
+Through M3: load multiple stems, see their waveforms stacked with a shared
+grid, drag one anchor on the reference stem to reposition the whole grid, and
+run automatic BPM/beat detection (Beat This! by default, librosa as a
+lightweight fallback) via the "Detect" button — refined by our own
+sample-precise transient snap and a linear-regression anchor/BPM fit. No
+playback or multi-anchor support yet — see the milestones in `PLAN.md`.
 
 ## Running the app
 
 ```bash
-uv sync --extra gui --extra dev
+uv sync --extra core --extra gui --extra dev
 uv run python -m beatgrid.gui.app
 ```
 
 This opens a window to load stems (wav/flac/mp3), with a reference-stem
-picker, BPM field and ms/sample nudge buttons for the first anchor. Needs an
-actual display — on WSL2 that means WSLg or an X server; headless
-environments can still run the structural tests via
-`QT_QPA_PLATFORM=offscreen uv run pytest tests/gui -m gui`.
+picker, a detector picker + "Detect" button, BPM field and ms/sample nudge
+buttons for the first anchor. Needs an actual display — on WSL2 that means
+WSLg or an X server; headless environments can still run the structural
+tests via `QT_QPA_PLATFORM=offscreen uv run pytest tests/gui -m gui`.
+
+Detection-related tests (`uv run pytest -m "not gui"`) need the `core` extra
+(`uv sync --extra core`); the first run downloads and caches the Beat This!
+model checkpoint (~tens of MB) from the CPJKU cloud.
 
 ## Prerequisites
 

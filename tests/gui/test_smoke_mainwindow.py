@@ -99,3 +99,49 @@ def test_changing_reference_stem_updates_project(qtbot, tmp_path):
     window.reference_combo.setCurrentText("bass")
 
     assert window.controller.project.reference_stem_id == "bass"
+
+
+def test_detect_action_updates_anchor_from_detector_result(qtbot, tmp_path, monkeypatch):
+    # Stubs out both the detector and the refine step so this test needs only
+    # PySide6 — no librosa/beat-this (and their heavier dependencies) required
+    # just to check the GUI wiring.
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    from beatgrid.detection.base import DetectionResult
+
+    class StubDetector:
+        name = "stub"
+
+        def detect(self, audio, sample_rate):
+            return DetectionResult(bpm=999.0, beat_times=[0.0, 1.0])
+
+    monkeypatch.setattr("beatgrid.gui.main_window.get_detector", lambda name=None: StubDetector())
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.propose_anchor",
+        lambda beat_times, audio, sample_rate: (0.25, 140.0),
+    )
+
+    window._on_detect()
+
+    anchor = window.controller.project.grid.anchors[0]
+    assert anchor.bpm == pytest.approx(140.0)
+    assert anchor.time_sec == pytest.approx(0.25)
+
+
+def test_detect_action_shows_warning_on_failure(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    def _boom(name=None):
+        raise RuntimeError("detector exploded")
+
+    monkeypatch.setattr("beatgrid.gui.main_window.get_detector", _boom)
+    monkeypatch.setattr("beatgrid.gui.main_window.QMessageBox.warning", lambda *a, **k: None)
+
+    original_bpm = window.controller.project.grid.anchors[0].bpm
+    window._on_detect()  # must not raise or crash
+
+    assert window.controller.project.grid.anchors[0].bpm == original_bpm

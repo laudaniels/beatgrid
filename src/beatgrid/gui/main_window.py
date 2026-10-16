@@ -3,12 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QScrollArea,
     QToolBar,
     QVBoxLayout,
@@ -16,6 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 from beatgrid.audio.loader import LoadedAudio, load_audio
+from beatgrid.detection.refine import propose_anchor
+from beatgrid.detection.registry import available_detectors, get_detector
 from beatgrid.grid.model import Anchor, BeatGrid, TimeSignature
 from beatgrid.grid.timeline import project_time_to_stem_time
 from beatgrid.gui.controllers.project_controller import ProjectController
@@ -60,6 +65,15 @@ class MainWindow(QMainWindow):
         self.reference_combo = QComboBox()
         self.reference_combo.currentTextChanged.connect(self._on_reference_changed)
         toolbar.addWidget(self.reference_combo)
+
+        toolbar.addWidget(QLabel(" Detector: "))
+        self.detector_combo = QComboBox()
+        self.detector_combo.addItems(available_detectors())
+        toolbar.addWidget(self.detector_combo)
+
+        detect_action = QAction("Detect", self)
+        detect_action.triggered.connect(self._on_detect)
+        toolbar.addAction(detect_action)
 
     def _build_central_widget(self) -> None:
         tracks_container = QWidget()
@@ -200,3 +214,28 @@ class MainWindow(QMainWindow):
             return
         if stem_id != self._controller.project.reference_stem_id:
             self._controller.set_reference_stem(stem_id)
+
+    def _on_detect(self) -> None:
+        """Run the selected detector on the reference stem, refine its raw
+        beat times with our own transient-snap + linear-regression fit
+        (detection.refine.propose_anchor), and move the first anchor there."""
+        if self._controller is None:
+            return
+        project = self._controller.project
+        reference_stem = project.reference_stem()
+        audio = self._audio[reference_stem.id].audio
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            detector = get_detector(self.detector_combo.currentText())
+            result = detector.detect(audio, reference_stem.sample_rate)
+            anchor_time, bpm = propose_anchor(result.beat_times, audio, reference_stem.sample_rate)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+            QMessageBox.warning(self, "Detection failed", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        anchor_id = project.grid.anchors[0].id
+        self._controller.set_anchor_bpm(anchor_id, bpm)
+        self._controller.move_anchor(anchor_id, anchor_time)
