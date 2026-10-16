@@ -4,10 +4,15 @@ from beatgrid.grid.model import Beat
 from beatgrid.project.models import Stem
 
 
+def project_time_to_stem_time(time_sec: float, stem: Stem) -> float:
+    """A project-time position translated to `stem`'s own continuous timeline."""
+    return time_sec - stem.start_offset_sec
+
+
 def project_time_to_stem_sample(time_sec: float, stem: Stem) -> int:
     """A project-time position (the reference stem's own timeline, offset 0)
     translated to a sample index in `stem`'s own audio."""
-    return round((time_sec - stem.start_offset_sec) * stem.sample_rate)
+    return round(project_time_to_stem_time(time_sec, stem) * stem.sample_rate)
 
 
 def stem_sample_to_project_time(sample_index: int, stem: Stem) -> float:

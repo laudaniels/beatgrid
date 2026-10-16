@@ -31,5 +31,20 @@ jobs:
       - run: uv sync --extra dev
       - run: uv run pytest -m "not gui"
 
-  # test-gui job (pytest-qt, QT_QPA_PLATFORM=offscreen, apt Qt runtime libs)
-  # is added once tests/gui/ has real tests (M2).
+  test-gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install Qt runtime libraries (headless/offscreen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1
+      - run: uv sync --extra gui --extra dev
+      - run: uv run pytest tests/gui -m gui
+        env:
+          QT_QPA_PLATFORM: offscreen

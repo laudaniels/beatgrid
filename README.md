@@ -10,7 +10,23 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
 
 ## Status
 
-Early scaffolding (M0). Not yet usable — see the milestones in `PLAN.md`.
+MVP (M2): load multiple stems, see their waveforms stacked with a shared
+grid, and drag one anchor on the reference stem to reposition the whole grid.
+No automatic detection, playback, or multi-anchor support yet — see the
+milestones in `PLAN.md`.
+
+## Running the app
+
+```bash
+uv sync --extra gui --extra dev
+uv run python -m beatgrid.gui.app
+```
+
+This opens a window to load stems (wav/flac/mp3), with a reference-stem
+picker, BPM field and ms/sample nudge buttons for the first anchor. Needs an
+actual display — on WSL2 that means WSLg or an X server; headless
+environments can still run the structural tests via
+`QT_QPA_PLATFORM=offscreen uv run pytest tests/gui -m gui`.
 
 ## Prerequisites
 
