@@ -30,6 +30,7 @@ def _sample_project() -> Project:
             channels=2,
             duration_sec=180.0,
             start_offset_sec=0.02,
+            muted=True,
         ),
     ]
     return Project(
@@ -59,6 +60,8 @@ def test_save_and_load_project_roundtrip(tmp_path):
     assert loaded.reference_stem_id == project.reference_stem_id
     assert [s.id for s in loaded.stems] == [s.id for s in project.stems]
     assert loaded.stems[1].start_offset_sec == 0.02
+    assert loaded.stems[1].muted is True
+    assert loaded.stems[1].solo is False
     assert loaded.grid.anchors[0].bpm == 128.0
     assert loaded.warp_renders[0].output_paths["kick"] == Path("warped/kick_warped.wav")
     assert loaded.reference_stem().id == "kick"

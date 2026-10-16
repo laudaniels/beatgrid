@@ -10,12 +10,15 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
 
 ## Status
 
-Through M3: load multiple stems, see their waveforms stacked with a shared
-grid, drag one anchor on the reference stem to reposition the whole grid, and
-run automatic BPM/beat detection (Beat This! by default, librosa as a
-lightweight fallback) via the "Detect" button — refined by our own
-sample-precise transient snap and a linear-regression anchor/BPM fit. No
-playback or multi-anchor support yet — see the milestones in `PLAN.md`.
+Through M4: load multiple stems, see their waveforms stacked with a shared
+grid, drag one anchor on the reference stem to reposition the whole grid, run
+automatic BPM/beat detection ("Detect"), see non-blocking warnings when
+stems' sample rate/length/offset look inconsistent, propose cross-correlation
+based start offsets ("Detect offsets" — always a proposal you confirm, never
+applied automatically), mute/solo per stem, and toggle a diagnostic "Show
+drift" overlay that marks where a stem's own transients stray from the
+shared grid without ever correcting it. No playback or multi-anchor support
+yet — see the milestones in `PLAN.md`.
 
 ## Running the app
 

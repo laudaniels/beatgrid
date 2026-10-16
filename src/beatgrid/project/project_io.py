@@ -48,6 +48,8 @@ def _stem_from_dict(data: dict) -> Stem:
         duration_sec=data["duration_sec"],
         start_offset_sec=data["start_offset_sec"],
         derived_kick=data["derived_kick"],
+        muted=data.get("muted", False),
+        solo=data.get("solo", False),
     )
 
 

@@ -17,6 +17,8 @@ class Stem:
     duration_sec: float = 0.0
     start_offset_sec: float = 0.0
     derived_kick: bool = False
+    muted: bool = False
+    solo: bool = False
 
 
 @dataclass

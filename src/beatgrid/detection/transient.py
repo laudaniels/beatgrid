@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+
 import numpy as np
 
 
@@ -56,3 +59,41 @@ def snap_to_nearest_transient(
     transients = np.asarray(transient_times)
     nearest = float(transients[np.argmin(np.abs(transients - time_sec))])
     return nearest if abs(nearest - time_sec) <= max_distance_sec else time_sec
+
+
+@dataclass(frozen=True)
+class DriftPoint:
+    time_sec: float
+    deviation_sec: float  # signed: transient_time - nearest_grid_time
+    is_drifting: bool
+
+
+def compute_drift(
+    transient_times: Sequence[float],
+    grid_beat_times: Sequence[float],
+    *,
+    threshold_sec: float = 0.02,
+) -> list[DriftPoint]:
+    """For each transient, the signed deviation from the nearest grid beat
+    time, flagged when it exceeds threshold_sec.
+
+    Purely diagnostic — this never adjusts the grid or the transient; it's
+    how a stem visibly "breathing" off the shared grid (e.g. a live bass)
+    gets surfaced without auto-correction.
+    """
+    if not grid_beat_times:
+        return [
+            DriftPoint(time_sec=t, deviation_sec=0.0, is_drifting=False) for t in transient_times
+        ]
+
+    grid = np.asarray(grid_beat_times)
+    points = []
+    for t in transient_times:
+        nearest = float(grid[np.argmin(np.abs(grid - t))])
+        deviation = t - nearest
+        points.append(
+            DriftPoint(
+                time_sec=t, deviation_sec=deviation, is_drifting=abs(deviation) > threshold_sec
+            )
+        )
+    return points

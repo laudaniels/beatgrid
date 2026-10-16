@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from beatgrid.audio.loader import LoadedAudio
+from beatgrid.detection.transient import DriftPoint
 from beatgrid.grid.model import Beat
 from beatgrid.gui.widgets.anchor_item import AnchorItem
+from beatgrid.gui.widgets.drift_overlay import DriftOverlay
 from beatgrid.gui.widgets.grid_overlay import GridOverlay
+from beatgrid.gui.widgets.stem_panel import StemPanel
 from beatgrid.project.models import Stem
 
 
 class StemTrackView(QWidget):
-    """One pyqtgraph plot row for a single stem: waveform + grid overlay.
-    X-axes of all rows are linked together by the caller so zoom/scroll stays
-    in sync across stems."""
+    """One pyqtgraph plot row for a single stem: stem panel (name/mute/solo)
+    + waveform + grid overlay + drift markers. X-axes of all rows are linked
+    together by the caller so zoom/scroll stays in sync across stems."""
 
     def __init__(self, stem: Stem, audio: LoadedAudio) -> None:
         super().__init__()
@@ -23,7 +26,9 @@ class StemTrackView(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel(f"{stem.role} — {stem.path.name}"))
+
+        self.stem_panel = StemPanel(stem)
+        layout.addWidget(self.stem_panel)
 
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setMouseEnabled(x=True, y=False)
@@ -37,6 +42,7 @@ class StemTrackView(QWidget):
         self.plot_widget.plot(time_axis, audio.audio, pen=pg.mkPen((100, 180, 255)))
 
         self.grid_overlay = GridOverlay(self.plot_widget.getPlotItem())
+        self.drift_overlay = DriftOverlay(self.plot_widget.getPlotItem())
 
     @property
     def stem(self) -> Stem:
@@ -47,6 +53,12 @@ class StemTrackView(QWidget):
 
     def set_beats(self, beats: list[Beat]) -> None:
         self.grid_overlay.set_beats(beats, self._stem)
+
+    def set_drift_points(self, points: list[DriftPoint]) -> None:
+        self.drift_overlay.set_points(points)
+
+    def clear_drift_points(self) -> None:
+        self.drift_overlay.clear()
 
     def set_anchor_item(self, item: AnchorItem) -> None:
         self._anchor_item = item

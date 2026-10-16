@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Signal
 
 from beatgrid.grid.model import Anchor
-from beatgrid.project.models import Project
+from beatgrid.project.models import Project, Stem
 
 
 class ProjectController(QObject):
@@ -50,4 +50,22 @@ class ProjectController(QObject):
         if stem_id not in {stem.id for stem in self._project.stems}:
             raise ValueError(f"stem {stem_id!r} not in project")
         self._project.reference_stem_id = stem_id
+        self.project_changed.emit()
+
+    def _stem(self, stem_id: str) -> Stem:
+        for stem in self._project.stems:
+            if stem.id == stem_id:
+                return stem
+        raise ValueError(f"stem {stem_id!r} not found")
+
+    def set_stem_muted(self, stem_id: str, muted: bool) -> None:
+        self._stem(stem_id).muted = muted
+        self.project_changed.emit()
+
+    def set_stem_solo(self, stem_id: str, solo: bool) -> None:
+        self._stem(stem_id).solo = solo
+        self.project_changed.emit()
+
+    def set_stem_offset(self, stem_id: str, start_offset_sec: float) -> None:
+        self._stem(stem_id).start_offset_sec = start_offset_sec
         self.project_changed.emit()

@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
+from PySide6.QtWidgets import QMessageBox
 
 from beatgrid.gui.main_window import MainWindow
 
@@ -128,6 +129,104 @@ def test_detect_action_updates_anchor_from_detector_result(qtbot, tmp_path, monk
     anchor = window.controller.project.grid.anchors[0]
     assert anchor.bpm == pytest.approx(140.0)
     assert anchor.time_sec == pytest.approx(0.25)
+
+
+def test_mute_checkbox_updates_stem_state(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    view = window.track_views["kick"]
+    view.stem_panel.mute_checkbox.setChecked(True)
+
+    stem = next(s for s in window.controller.project.stems if s.id == "kick")
+    assert stem.muted is True
+
+
+def test_solo_checkbox_updates_stem_state(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    view = window.track_views["bass"]
+    view.stem_panel.solo_checkbox.setChecked(True)
+
+    stem = next(s for s in window.controller.project.stems if s.id == "bass")
+    assert stem.solo is True
+
+
+def test_validation_warning_shown_for_mismatched_stems(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    warned = {}
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QMessageBox.warning",
+        lambda self, title, text: warned.update(title=title, text=text),
+    )
+
+    kick_path = tmp_path / "kick.wav"
+    bass_path = tmp_path / "bass.wav"
+    _write_wav(kick_path, duration_sec=2.0, sample_rate=8000)
+    _write_wav(bass_path, duration_sec=2.0, sample_rate=16000)  # mismatched sample rate
+
+    window.load_stems([kick_path, bass_path])
+
+    assert warned.get("title") == "Stem validation warnings"
+    assert "sample rate" in warned.get("text", "")
+
+
+def test_detect_offsets_applies_proposal_on_confirmation(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    monkeypatch.setattr("beatgrid.gui.main_window.detect_offset", lambda *a, **k: 0.123)
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QMessageBox.question",
+        lambda *a, **k: QMessageBox.StandardButton.Yes,
+    )
+
+    window._on_detect_offsets()
+
+    bass_stem = next(s for s in window.controller.project.stems if s.id == "bass")
+    assert bass_stem.start_offset_sec == pytest.approx(0.123)
+
+
+def test_detect_offsets_does_not_apply_without_confirmation(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    monkeypatch.setattr("beatgrid.gui.main_window.detect_offset", lambda *a, **k: 0.123)
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QMessageBox.question",
+        lambda *a, **k: QMessageBox.StandardButton.No,
+    )
+
+    window._on_detect_offsets()
+
+    bass_stem = next(s for s in window.controller.project.stems if s.id == "bass")
+    assert bass_stem.start_offset_sec == 0.0
+
+
+def test_toggle_drift_populates_and_clears_overlays(qtbot, tmp_path, monkeypatch):
+    # Stub out detect_transients so this needs only PySide6, not librosa.
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.detect_transients", lambda audio, sample_rate: [0.01, 0.52]
+    )
+
+    window.drift_action.setChecked(True)
+    for view in window.track_views.values():
+        assert view.drift_overlay.point_count > 0
+
+    window.drift_action.setChecked(False)
+    for view in window.track_views.values():
+        assert view.drift_overlay.point_count == 0
 
 
 def test_detect_action_shows_warning_on_failure(qtbot, tmp_path, monkeypatch):

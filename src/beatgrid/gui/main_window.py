@@ -19,8 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from beatgrid.audio.loader import LoadedAudio, load_audio
+from beatgrid.audio.offset_detection import detect_offset
+from beatgrid.audio.validation import validate_stems
 from beatgrid.detection.refine import propose_anchor
 from beatgrid.detection.registry import available_detectors, get_detector
+from beatgrid.detection.transient import compute_drift, detect_transients
 from beatgrid.grid.model import Anchor, BeatGrid, TimeSignature
 from beatgrid.grid.timeline import project_time_to_stem_time
 from beatgrid.gui.controllers.project_controller import ProjectController
@@ -30,6 +33,7 @@ from beatgrid.gui.widgets.transport_bar import TransportBar
 from beatgrid.project.models import Project, Stem
 
 DEFAULT_BPM = 120.0
+DRIFT_THRESHOLD_SEC = 0.02
 
 
 class MainWindow(QMainWindow):
@@ -41,6 +45,8 @@ class MainWindow(QMainWindow):
         self._controller: ProjectController | None = None
         self._track_views: dict[str, StemTrackView] = {}
         self._audio: dict[str, LoadedAudio] = {}
+        self._transients_by_stem: dict[str, list[float]] = {}
+        self._show_drift = False
 
         self._build_toolbar()
         self._build_central_widget()
@@ -74,6 +80,15 @@ class MainWindow(QMainWindow):
         detect_action = QAction("Detect", self)
         detect_action.triggered.connect(self._on_detect)
         toolbar.addAction(detect_action)
+
+        detect_offsets_action = QAction("Detect offsets", self)
+        detect_offsets_action.triggered.connect(self._on_detect_offsets)
+        toolbar.addAction(detect_offsets_action)
+
+        self.drift_action = QAction("Show drift", self)
+        self.drift_action.setCheckable(True)
+        self.drift_action.toggled.connect(self._on_toggle_drift)
+        toolbar.addAction(self.drift_action)
 
     def _build_central_widget(self) -> None:
         tracks_container = QWidget()
@@ -140,11 +155,22 @@ class MainWindow(QMainWindow):
             created_at=datetime.now(),
         )
 
+        warnings = validate_stems(stems, reference_stem_id=project.reference_stem_id)
+
         self._audio = audio_by_id
+        self._transients_by_stem = {}
+        self._show_drift = False
+        self.drift_action.blockSignals(True)
+        self.drift_action.setChecked(False)
+        self.drift_action.blockSignals(False)
         self._controller = ProjectController(project)
         self._controller.project_changed.connect(self._redraw)
         self._build_track_views()
         self._redraw()
+
+        if warnings:
+            text = "\n".join(f"{w.stem_id}: {w.message}" for w in warnings)
+            QMessageBox.warning(self, "Stem validation warnings", text)
 
     def _build_track_views(self) -> None:
         assert self._controller is not None
@@ -160,6 +186,8 @@ class MainWindow(QMainWindow):
         reference_view_box = None
         for stem in self._controller.project.stems:
             view = StemTrackView(stem, self._audio[stem.id])
+            view.stem_panel.muted_changed.connect(self._on_stem_muted)
+            view.stem_panel.solo_changed.connect(self._on_stem_solo)
             self._tracks_layout.insertWidget(self._tracks_layout.count() - 1, view)
             self._track_views[stem.id] = view
             self.reference_combo.addItem(stem.id)
@@ -187,6 +215,15 @@ class MainWindow(QMainWindow):
                 item = AnchorItem(anchor.id, anchor_local_time)
                 item.position_changed.connect(self._on_anchor_moved)
                 view.set_anchor_item(item)
+
+            if self._show_drift:
+                stem = next(s for s in project.stems if s.id == stem_id)
+                local_beat_times = [project_time_to_stem_time(b.time_sec, stem) for b in beats]
+                transients = self._transients_by_stem.get(stem_id, [])
+                points = compute_drift(
+                    transients, local_beat_times, threshold_sec=DRIFT_THRESHOLD_SEC
+                )
+                view.set_drift_points(points)
 
         self.transport_bar.set_bpm(anchor.bpm)
         self.transport_bar.set_sample_rate(reference_stem.sample_rate)
@@ -239,3 +276,77 @@ class MainWindow(QMainWindow):
         anchor_id = project.grid.anchors[0].id
         self._controller.set_anchor_bpm(anchor_id, bpm)
         self._controller.move_anchor(anchor_id, anchor_time)
+
+    def _on_stem_muted(self, stem_id: str, muted: bool) -> None:
+        if self._controller is None:
+            return
+        self._controller.set_stem_muted(stem_id, muted)
+
+    def _on_stem_solo(self, stem_id: str, solo: bool) -> None:
+        if self._controller is None:
+            return
+        self._controller.set_stem_solo(stem_id, solo)
+
+    def _on_detect_offsets(self) -> None:
+        """Propose a start_offset_sec for every non-reference stem via
+        cross-correlation against the reference, then ask for one explicit
+        confirmation before applying any of them — never automatic."""
+        if self._controller is None:
+            return
+        project = self._controller.project
+        reference_stem = project.reference_stem()
+        reference_audio = self._audio[reference_stem.id].audio
+
+        proposals: dict[str, float] = {}
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for stem in project.stems:
+                if stem.id == reference_stem.id:
+                    continue
+                try:
+                    proposals[stem.id] = detect_offset(
+                        reference_audio,
+                        reference_stem.sample_rate,
+                        self._audio[stem.id].audio,
+                        stem.sample_rate,
+                    )
+                except ValueError as exc:
+                    QMessageBox.warning(self, "Offset detection failed", f"{stem.id}: {exc}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if not proposals:
+            return
+
+        lines = "\n".join(f"{stem_id}: {offset:+.3f}s" for stem_id, offset in proposals.items())
+        answer = QMessageBox.question(
+            self,
+            "Apply detected offsets?",
+            f"Proposed start offsets relative to {reference_stem.id}:\n\n{lines}\n\n"
+            "Apply these to the project?",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            for stem_id, offset in proposals.items():
+                self._controller.set_stem_offset(stem_id, offset)
+
+    def _on_toggle_drift(self, checked: bool) -> None:
+        self._show_drift = checked
+        if self._controller is None:
+            return
+        if checked:
+            self._ensure_transients_cached()
+        else:
+            for view in self._track_views.values():
+                view.clear_drift_points()
+        self._redraw()
+
+    def _ensure_transients_cached(self) -> None:
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for stem_id, loaded in self._audio.items():
+                if stem_id not in self._transients_by_stem:
+                    self._transients_by_stem[stem_id] = detect_transients(
+                        loaded.audio, loaded.sample_rate
+                    )
+        finally:
+            QApplication.restoreOverrideCursor()
