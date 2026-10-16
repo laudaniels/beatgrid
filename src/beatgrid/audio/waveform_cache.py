@@ -27,6 +27,23 @@ class WaveformCache:
         return candidates[-1] if candidates else self.levels[0]
 
 
+def level_to_xy(level: PeakLevel, sample_rate: int) -> tuple[np.ndarray, np.ndarray]:
+    """A (xs, ys) pair ready for a `connect="pairs"` plot curve: one vertical
+    min-to-max segment per bucket, centered on the bucket's time position —
+    an efficient envelope rendering of a peak level (no need to touch
+    individual samples)."""
+    n = len(level.mins)
+    if n == 0:
+        return np.empty(0), np.empty(0)
+
+    bucket_centers_sec = (np.arange(n) * level.bucket_size + level.bucket_size / 2) / sample_rate
+    xs = np.repeat(bucket_centers_sec, 2)
+    ys = np.empty(n * 2, dtype=np.float32)
+    ys[0::2] = level.mins
+    ys[1::2] = level.maxs
+    return xs, ys
+
+
 def build_waveform_cache(
     audio: np.ndarray,
     sample_rate: int,

@@ -543,3 +543,67 @@ def test_playhead_tick_stops_itself_when_player_is_not_playing(qtbot, tmp_path):
 
     assert window.transport_bar.play_button.isChecked() is False
     assert not window._playhead_timer.isActive()
+
+
+def test_undo_redo_actions_disabled_before_any_edit(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    assert window.undo_action.isEnabled() is False
+    assert window.redo_action.isEnabled() is False
+
+
+def test_undo_action_reverts_last_edit_and_updates_enabled_state(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    window._on_bpm_changed(140.0)
+    assert window.undo_action.isEnabled() is True
+
+    window._on_undo()
+
+    assert window.controller.project.grid.anchors[0].bpm == 120.0
+    assert window.undo_action.isEnabled() is False
+    assert window.redo_action.isEnabled() is True
+
+
+def test_redo_action_reapplies_undone_edit(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    window._on_bpm_changed(140.0)
+    window._on_undo()
+    window._on_redo()
+
+    assert window.controller.project.grid.anchors[0].bpm == 140.0
+    assert window.redo_action.isEnabled() is False
+
+
+def test_remove_anchor_action_has_delete_shortcut(qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeySequence
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    assert window.remove_anchor_action.shortcut() == QKeySequence(Qt.Key.Key_Delete)
+
+
+def test_play_pause_shortcut_toggles_play_button(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    calls = []
+    monkeypatch.setattr(window._audio_player, "play", lambda: calls.append("play"))
+    monkeypatch.setattr(window._audio_player, "stop", lambda: calls.append("stop"))
+
+    window._on_play_pause_shortcut()
+    assert calls == ["play"]
+
+    window._on_play_pause_shortcut()
+    assert calls == ["play", "stop"]

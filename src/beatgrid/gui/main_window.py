@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -83,16 +83,30 @@ class MainWindow(QMainWindow):
         toolbar.addAction(load_action)
 
         open_project_action = QAction("Open project...", self)
+        open_project_action.setShortcut(QKeySequence.StandardKey.Open)
         open_project_action.triggered.connect(self._on_open_project)
         toolbar.addAction(open_project_action)
 
         save_project_action = QAction("Save project...", self)
+        save_project_action.setShortcut(QKeySequence.StandardKey.Save)
         save_project_action.triggered.connect(self._on_save_project)
         toolbar.addAction(save_project_action)
 
         export_action = QAction("Export grid...", self)
         export_action.triggered.connect(self._on_export_grid)
         toolbar.addAction(export_action)
+
+        self.undo_action = QAction("Undo", self)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.setEnabled(False)
+        self.undo_action.triggered.connect(self._on_undo)
+        toolbar.addAction(self.undo_action)
+
+        self.redo_action = QAction("Redo", self)
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.redo_action.setEnabled(False)
+        self.redo_action.triggered.connect(self._on_redo)
+        toolbar.addAction(self.redo_action)
 
         toolbar.addWidget(QLabel(" Reference stem: "))
         self.reference_combo = QComboBox()
@@ -124,15 +138,24 @@ class MainWindow(QMainWindow):
         add_anchor_action.triggered.connect(self._on_add_anchor)
         toolbar.addAction(add_anchor_action)
 
-        remove_anchor_action = QAction("Remove anchor", self)
-        remove_anchor_action.setToolTip("Remove the selected anchor (click an anchor to select it)")
-        remove_anchor_action.triggered.connect(self._on_remove_anchor)
-        toolbar.addAction(remove_anchor_action)
+        self.remove_anchor_action = QAction("Remove anchor", self)
+        self.remove_anchor_action.setToolTip(
+            "Remove the selected anchor (click an anchor to select it)"
+        )
+        self.remove_anchor_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
+        self.remove_anchor_action.triggered.connect(self._on_remove_anchor)
+        toolbar.addAction(self.remove_anchor_action)
 
         warp_action = QAction("Warp...", self)
         warp_action.setToolTip("Warp/time-stretch all stems to a fixed tempo (prototype engine)")
         warp_action.triggered.connect(self._on_open_warp_dialog)
         toolbar.addAction(warp_action)
+
+        self.play_pause_action = QAction("Play/Pause", self)
+        self.play_pause_action.setShortcut(QKeySequence(Qt.Key.Key_Space))
+        self.play_pause_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.play_pause_action.triggered.connect(self._on_play_pause_shortcut)
+        self.addAction(self.play_pause_action)  # no toolbar button; shortcut only
 
     def _build_central_widget(self) -> None:
         tracks_container = QWidget()
@@ -301,6 +324,9 @@ class MainWindow(QMainWindow):
         if selected_anchor is not None:
             self.transport_bar.set_bpm(selected_anchor.bpm)
         self.transport_bar.set_sample_rate(reference_stem.sample_rate)
+
+        self.undo_action.setEnabled(self._controller.can_undo)
+        self.redo_action.setEnabled(self._controller.can_redo)
 
         self._refresh_player(beats)
 
@@ -649,3 +675,14 @@ class MainWindow(QMainWindow):
 
         self._controller.add_warp_render(warp_render)
         dialog.show_result(warp_render.output_paths)
+
+    def _on_undo(self) -> None:
+        if self._controller is not None:
+            self._controller.undo()
+
+    def _on_redo(self) -> None:
+        if self._controller is not None:
+            self._controller.redo()
+
+    def _on_play_pause_shortcut(self) -> None:
+        self.transport_bar.play_button.click()

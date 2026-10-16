@@ -1,6 +1,6 @@
 import numpy as np
 
-from beatgrid.audio.waveform_cache import build_waveform_cache
+from beatgrid.audio.waveform_cache import build_waveform_cache, level_to_xy
 
 
 def test_level_matches_manual_min_max():
@@ -38,3 +38,27 @@ def test_levels_sorted_by_bucket_size():
     audio = np.zeros(100, dtype=np.float32)
     cache = build_waveform_cache(audio, sample_rate=44100, bucket_sizes=(256, 16, 64))
     assert [level.bucket_size for level in cache.levels] == [16, 64, 256]
+
+
+def test_level_to_xy_produces_one_vertical_segment_per_bucket():
+    audio = np.arange(20, dtype=np.float32)
+    cache = build_waveform_cache(audio, sample_rate=10, bucket_sizes=(10,))
+    level = cache.levels[0]
+
+    xs, ys = level_to_xy(level, sample_rate=10)
+
+    assert len(xs) == len(ys) == 4  # 2 buckets x 2 points (min, max) each
+    # bucket 0 covers samples [0,10) -> center at sample 5 -> 0.5s
+    assert xs[0] == xs[1] == 0.5
+    assert (ys[0], ys[1]) == (0.0, 9.0)
+    # bucket 1 covers samples [10,20) -> center at sample 15 -> 1.5s
+    assert xs[2] == xs[3] == 1.5
+    assert (ys[2], ys[3]) == (10.0, 19.0)
+
+
+def test_level_to_xy_empty_level():
+    xs, ys = level_to_xy(
+        build_waveform_cache(np.zeros(0, dtype=np.float32), 44100).levels[0], 44100
+    )
+    assert len(xs) == 0
+    assert len(ys) == 0
