@@ -38,6 +38,20 @@ milestones — read it before making architectural changes.
 - **New warp/time-stretch engine**: implement `TimeStretcher` in
   `render/engines/`, register it in `render/engines/registry.py`.
 
+## Known gotchas
+
+- PySide6 is pinned `<6.12` (see `pyproject.toml`'s `gui` extra): 6.12.0 has a
+  refcounting regression (PYSIDE-3477) where bool-typed signal emissions —
+  which pyqtgraph's graphics-item view-change machinery does internally —
+  can crash the interpreter with `Fatal Python error: bool_dealloc` on
+  Python <3.12. Don't bump PySide6 past 6.12 without checking that bug is
+  fixed upstream.
+- `GridOverlay` draws all beat/bar lines as two persistent `PlotCurveItem`s
+  (updated via `setData`) instead of one `pg.InfiniteLine` per beat — adding
+  hundreds of individual `InfiniteLine` GraphicsObjects is both what
+  triggered the crash above in practice and needlessly expensive to redraw.
+  Only the single draggable anchor should ever be a real `InfiniteLine`.
+
 ## License trade-offs to remember
 
 - `beat-this` and `librosa` are MIT/ISC — no concerns.

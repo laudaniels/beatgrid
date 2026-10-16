@@ -23,7 +23,13 @@ core = [
 ]
 # Desktop GUI: PySide6 + pyqtgraph, sounddevice for playback.
 gui = [
-    "PySide6>=6.6",
+    # PySide6 6.12.0 has a refcounting regression (PYSIDE-3477): any bool-typed
+    # signal emission (which pyqtgraph's graphics-item view-change machinery
+    # does internally) can eventually corrupt the True/False singleton and
+    # crash with "Fatal Python error: bool_dealloc" on Python <3.12 (where
+    # True/False aren't immortal yet). Pin below 6.12 until that's fixed
+    # upstream.
+    "PySide6>=6.6,<6.12",
     "pyqtgraph>=0.13",
     "sounddevice>=0.5",
     "pytest-qt>=4.4",
