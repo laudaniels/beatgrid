@@ -10,15 +10,17 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
 
 ## Status
 
-Through M4: load multiple stems, see their waveforms stacked with a shared
-grid, drag one anchor on the reference stem to reposition the whole grid, run
+Through M5: load multiple stems, see their waveforms stacked with a shared
+grid, drag anchors on the reference stem to reposition the grid, run
 automatic BPM/beat detection ("Detect"), see non-blocking warnings when
 stems' sample rate/length/offset look inconsistent, propose cross-correlation
 based start offsets ("Detect offsets" — always a proposal you confirm, never
-applied automatically), mute/solo per stem, and toggle a diagnostic "Show
-drift" overlay that marks where a stem's own transients stray from the
-shared grid without ever correcting it. No playback or multi-anchor support
-yet — see the milestones in `PLAN.md`.
+applied automatically), mute/solo per stem, toggle a diagnostic "Show drift"
+overlay that marks where a stem's own transients stray from the shared grid
+without ever correcting it, and add/remove anchors for tracks with tempo
+drift ("Add anchor" inserts one at the center of the current view with a
+locally-detected BPM; click an anchor to select it, then "Remove anchor" or
+edit its BPM/nudge it). No playback yet — see the milestones in `PLAN.md`.
 
 ## Running the app
 

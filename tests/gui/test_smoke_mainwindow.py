@@ -229,6 +229,76 @@ def test_toggle_drift_populates_and_clears_overlays(qtbot, tmp_path, monkeypatch
         assert view.drift_overlay.point_count == 0
 
 
+def test_add_anchor_inserts_at_view_center_with_local_bpm(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    from beatgrid.detection.base import DetectionResult
+
+    class StubDetector:
+        name = "stub"
+
+        def detect(self, audio, sample_rate):
+            return DetectionResult(bpm=1.0, beat_times=[0.0, 1.0])
+
+    monkeypatch.setattr("beatgrid.gui.main_window.get_detector", lambda name=None: StubDetector())
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.propose_anchor", lambda beat_times, audio, sr: (0.0, 130.0)
+    )
+
+    reference_view = window.track_views["kick"]
+    reference_view.view_box().setXRange(0.4, 0.6, padding=0)  # center ~0.5s
+
+    window._on_add_anchor()
+
+    anchors = window.controller.project.grid.anchors
+    assert len(anchors) == 2
+    new_anchor = anchors[1]
+    assert new_anchor.time_sec == pytest.approx(0.5, abs=0.05)
+    assert new_anchor.bpm == 130.0
+    assert window._selected_anchor_id == new_anchor.id
+
+
+def test_remove_selected_anchor(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    second_id = window.controller.add_anchor(1.0, 120.0)
+    window._selected_anchor_id = second_id
+
+    window._on_remove_anchor()
+
+    remaining_ids = [a.id for a in window.controller.project.grid.anchors]
+    assert second_id not in remaining_ids
+    assert len(remaining_ids) == 1
+
+
+def test_cannot_remove_last_remaining_anchor(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+    monkeypatch.setattr("beatgrid.gui.main_window.QMessageBox.information", lambda *a, **k: None)
+
+    window._on_remove_anchor()
+
+    assert len(window.controller.project.grid.anchors) == 1
+
+
+def test_clicking_anchor_selects_it_and_updates_bpm_display(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    second_id = window.controller.add_anchor(1.0, 140.0)
+
+    window._on_anchor_selected(second_id)
+
+    assert window._selected_anchor_id == second_id
+    assert window.transport_bar.bpm_spinbox.value() == pytest.approx(140.0)
+
+
 def test_detect_action_shows_warning_on_failure(qtbot, tmp_path, monkeypatch):
     window = MainWindow()
     qtbot.addWidget(window)

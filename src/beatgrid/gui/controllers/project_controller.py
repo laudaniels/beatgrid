@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from PySide6.QtCore import QObject, Signal
 
 from beatgrid.grid.model import Anchor
@@ -36,6 +38,7 @@ class ProjectController(QObject):
         anchor = self._anchor(anchor_id)
         anchor.time_sec = max(0.0, new_time_sec)
         anchor.sample_index = round(anchor.time_sec * reference.sample_rate)
+        self._project.grid.renumber_anchors()
         self.project_changed.emit()
 
     def nudge_anchor(self, anchor_id: str, delta_sec: float) -> None:
@@ -44,6 +47,33 @@ class ProjectController(QObject):
 
     def set_anchor_bpm(self, anchor_id: str, bpm: float) -> None:
         self._anchor(anchor_id).bpm = bpm
+        self._project.grid.renumber_anchors()
+        self.project_changed.emit()
+
+    def add_anchor(self, time_sec: float, bpm: float) -> str:
+        """Insert a new anchor at time_sec with a local bpm estimate;
+        beat_index is recomputed for every anchor (renumber_anchors) so bar/
+        beat numbering stays continuous. Returns the new anchor's id."""
+        reference = self._project.reference_stem()
+        time_sec = max(0.0, time_sec)
+        anchor = Anchor(
+            id=f"anchor-{uuid4().hex[:8]}",
+            time_sec=time_sec,
+            sample_index=round(time_sec * reference.sample_rate),
+            beat_index=0,  # placeholder; renumber_anchors fixes this below
+            bpm=bpm,
+        )
+        self._project.grid.anchors.append(anchor)
+        self._project.grid.renumber_anchors()
+        self.project_changed.emit()
+        return anchor.id
+
+    def remove_anchor(self, anchor_id: str) -> None:
+        if len(self._project.grid.anchors) <= 1:
+            raise ValueError("cannot remove the last remaining anchor")
+        self._anchor(anchor_id)  # raises if unknown
+        self._project.grid.anchors = [a for a in self._project.grid.anchors if a.id != anchor_id]
+        self._project.grid.renumber_anchors()
         self.project_changed.emit()
 
     def set_reference_stem(self, stem_id: str) -> None:

@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
         self._audio: dict[str, LoadedAudio] = {}
         self._transients_by_stem: dict[str, list[float]] = {}
         self._show_drift = False
+        self._selected_anchor_id: str | None = None
 
         self._build_toolbar()
         self._build_central_widget()
@@ -89,6 +90,18 @@ class MainWindow(QMainWindow):
         self.drift_action.setCheckable(True)
         self.drift_action.toggled.connect(self._on_toggle_drift)
         toolbar.addAction(self.drift_action)
+
+        add_anchor_action = QAction("Add anchor", self)
+        add_anchor_action.setToolTip(
+            "Add a new anchor at the center of the reference stem's current view"
+        )
+        add_anchor_action.triggered.connect(self._on_add_anchor)
+        toolbar.addAction(add_anchor_action)
+
+        remove_anchor_action = QAction("Remove anchor", self)
+        remove_anchor_action.setToolTip("Remove the selected anchor (click an anchor to select it)")
+        remove_anchor_action.triggered.connect(self._on_remove_anchor)
+        toolbar.addAction(remove_anchor_action)
 
     def _build_central_widget(self) -> None:
         tracks_container = QWidget()
@@ -160,6 +173,7 @@ class MainWindow(QMainWindow):
         self._audio = audio_by_id
         self._transients_by_stem = {}
         self._show_drift = False
+        self._selected_anchor_id = grid.anchors[0].id
         self.drift_action.blockSignals(True)
         self.drift_action.setChecked(False)
         self.drift_action.blockSignals(False)
@@ -204,17 +218,24 @@ class MainWindow(QMainWindow):
         assert self._controller is not None
         project = self._controller.project
         reference_stem = project.reference_stem()
-        anchor = project.grid.anchors[0]
         beats = project.grid.generate_beats(end_time_sec=reference_stem.duration_sec)
+
+        if self._selected_anchor_id not in {a.id for a in project.grid.anchors}:
+            self._selected_anchor_id = project.grid.anchors[0].id
+        selected_id = self._selected_anchor_id
 
         for stem_id, view in self._track_views.items():
             view.set_beats(beats)
-            view.clear_anchor_item()
+            view.clear_anchor_items()
             if stem_id == project.reference_stem_id:
-                anchor_local_time = project_time_to_stem_time(anchor.time_sec, reference_stem)
-                item = AnchorItem(anchor.id, anchor_local_time)
-                item.position_changed.connect(self._on_anchor_moved)
-                view.set_anchor_item(item)
+                for anchor in project.grid.anchors:
+                    anchor_local_time = project_time_to_stem_time(anchor.time_sec, reference_stem)
+                    item = AnchorItem(
+                        anchor.id, anchor_local_time, is_selected=anchor.id == selected_id
+                    )
+                    item.position_changed.connect(self._on_anchor_moved)
+                    item.selected.connect(self._on_anchor_selected)
+                    view.add_anchor_item(item)
 
             if self._show_drift:
                 stem = next(s for s in project.stems if s.id == stem_id)
@@ -225,26 +246,43 @@ class MainWindow(QMainWindow):
                 )
                 view.set_drift_points(points)
 
-        self.transport_bar.set_bpm(anchor.bpm)
+        selected_anchor = self._find_anchor(selected_id)
+        if selected_anchor is not None:
+            self.transport_bar.set_bpm(selected_anchor.bpm)
         self.transport_bar.set_sample_rate(reference_stem.sample_rate)
+
+    def _find_anchor(self, anchor_id: str | None) -> Anchor | None:
+        if self._controller is None or anchor_id is None:
+            return None
+        for anchor in self._controller.project.grid.anchors:
+            if anchor.id == anchor_id:
+                return anchor
+        return None
 
     def _on_anchor_moved(self, anchor_id: str, new_local_time_sec: float) -> None:
         assert self._controller is not None
         reference_stem = self._controller.project.reference_stem()
         project_time = new_local_time_sec + reference_stem.start_offset_sec
+        self._selected_anchor_id = anchor_id
         self._controller.move_anchor(anchor_id, project_time)
 
-    def _on_bpm_changed(self, bpm: float) -> None:
-        if self._controller is None:
+    def _on_anchor_selected(self, anchor_id: str) -> None:
+        if self._selected_anchor_id == anchor_id:
             return
-        anchor_id = self._controller.project.grid.anchors[0].id
-        self._controller.set_anchor_bpm(anchor_id, bpm)
+        self._selected_anchor_id = anchor_id
+        anchor = self._find_anchor(anchor_id)
+        if anchor is not None:
+            self.transport_bar.set_bpm(anchor.bpm)
+
+    def _on_bpm_changed(self, bpm: float) -> None:
+        if self._controller is None or self._selected_anchor_id is None:
+            return
+        self._controller.set_anchor_bpm(self._selected_anchor_id, bpm)
 
     def _on_nudge(self, delta_sec: float) -> None:
-        if self._controller is None:
+        if self._controller is None or self._selected_anchor_id is None:
             return
-        anchor_id = self._controller.project.grid.anchors[0].id
-        self._controller.nudge_anchor(anchor_id, delta_sec)
+        self._controller.nudge_anchor(self._selected_anchor_id, delta_sec)
 
     def _on_reference_changed(self, stem_id: str) -> None:
         if self._controller is None or not stem_id:
@@ -274,6 +312,7 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
         anchor_id = project.grid.anchors[0].id
+        self._selected_anchor_id = anchor_id
         self._controller.set_anchor_bpm(anchor_id, bpm)
         self._controller.move_anchor(anchor_id, anchor_time)
 
@@ -348,5 +387,69 @@ class MainWindow(QMainWindow):
                     self._transients_by_stem[stem_id] = detect_transients(
                         loaded.audio, loaded.sample_rate
                     )
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _on_add_anchor(self) -> None:
+        """Insert a new anchor at the center of the reference stem's current
+        view, with a locally-estimated BPM (refine.py applied to just that
+        segment, via _estimate_local_bpm) rather than inheriting a
+        neighboring anchor's tempo wholesale."""
+        if self._controller is None:
+            return
+        project = self._controller.project
+        reference_stem = project.reference_stem()
+        reference_view = self._track_views[reference_stem.id]
+
+        x_min, x_max = reference_view.view_box().viewRange()[0]
+        local_time = (x_min + x_max) / 2.0
+        project_time = local_time + reference_stem.start_offset_sec
+
+        bpm = self._estimate_local_bpm(project_time, reference_stem)
+        anchor_id = self._controller.add_anchor(project_time, bpm)
+        self._selected_anchor_id = anchor_id
+
+    def _on_remove_anchor(self) -> None:
+        if self._controller is None or self._selected_anchor_id is None:
+            return
+        if len(self._controller.project.grid.anchors) <= 1:
+            QMessageBox.information(
+                self, "Cannot remove anchor", "A project needs at least one anchor."
+            )
+            return
+        try:
+            self._controller.remove_anchor(self._selected_anchor_id)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Could not remove anchor", str(exc))
+            return
+        self._selected_anchor_id = None  # _redraw() falls back to the first remaining anchor
+
+    def _estimate_local_bpm(self, project_time: float, reference_stem: Stem) -> float:
+        """Detect tempo in a short window of audio around project_time —
+        the same detection+refine pipeline as the initial anchor estimate
+        (detection.refine.propose_anchor), just applied to one segment
+        instead of the whole track."""
+        audio = self._audio[reference_stem.id].audio
+        sample_rate = reference_stem.sample_rate
+        window_sec = 8.0
+        center_sample = int(project_time * sample_rate)
+        half_window = int(window_sec / 2 * sample_rate)
+        segment = audio[max(0, center_sample - half_window) : center_sample + half_window]
+
+        fallback_bpm = min(
+            self._controller.project.grid.anchors, key=lambda a: abs(a.time_sec - project_time)
+        ).bpm
+
+        if len(segment) < sample_rate:  # too short a window to analyze meaningfully
+            return fallback_bpm
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            detector = get_detector(self.detector_combo.currentText())
+            result = detector.detect(segment, sample_rate)
+            _anchor_time, bpm = propose_anchor(result.beat_times, segment, sample_rate)
+            return bpm
+        except Exception:  # noqa: BLE001 - local estimate is best-effort, never fatal
+            return fallback_bpm
         finally:
             QApplication.restoreOverrideCursor()

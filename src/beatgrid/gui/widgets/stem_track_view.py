@@ -22,7 +22,7 @@ class StemTrackView(QWidget):
     def __init__(self, stem: Stem, audio: LoadedAudio) -> None:
         super().__init__()
         self._stem = stem
-        self._anchor_item: AnchorItem | None = None
+        self._anchor_items: list[AnchorItem] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -60,11 +60,11 @@ class StemTrackView(QWidget):
     def clear_drift_points(self) -> None:
         self.drift_overlay.clear()
 
-    def set_anchor_item(self, item: AnchorItem) -> None:
-        self._anchor_item = item
+    def add_anchor_item(self, item: AnchorItem) -> None:
+        self._anchor_items.append(item)
         self.plot_widget.addItem(item)
 
-    def clear_anchor_item(self) -> None:
-        if self._anchor_item is not None:
-            self.plot_widget.removeItem(self._anchor_item)
-            self._anchor_item = None
+    def clear_anchor_items(self) -> None:
+        for item in self._anchor_items:
+            self.plot_widget.removeItem(item)
+        self._anchor_items.clear()
