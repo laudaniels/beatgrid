@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,10 +20,14 @@ def load_audio(path: Path) -> LoadedAudio:
     soundfile (libsndfile) handles wav/flac directly. Some mp3s aren't
     decodable by libsndfile, so those fall back to librosa/audioread, which
     needs ffmpeg on PATH.
+
+    The file is read into memory in one go before decoding: libsndfile does
+    many small reads/seeks, which is ~20x slower on filesystems with high
+    per-call latency (e.g. Windows drives under WSL's /mnt/c).
     """
     path = Path(path)
     try:
-        data, sample_rate = sf.read(path, dtype="float32", always_2d=False)
+        data, sample_rate = sf.read(io.BytesIO(path.read_bytes()), dtype="float32", always_2d=False)
     except RuntimeError:
         data, sample_rate = _load_via_librosa(path)
 

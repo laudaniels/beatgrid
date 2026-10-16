@@ -1,6 +1,6 @@
 import numpy as np
 
-from beatgrid.audio.waveform_cache import build_waveform_cache, level_to_xy
+from beatgrid.audio.waveform_cache import build_waveform_cache, level_to_xy, samples_to_xy
 
 
 def test_level_matches_manual_min_max():
@@ -62,3 +62,16 @@ def test_level_to_xy_empty_level():
     )
     assert len(xs) == 0
     assert len(ys) == 0
+
+
+def test_cache_records_whole_file_peak():
+    audio = np.array([0.1, -0.8, 0.5], dtype=np.float32)
+    cache = build_waveform_cache(audio, sample_rate=44100, bucket_sizes=(2,))
+    assert cache.peak == np.float32(0.8)
+
+
+def test_samples_to_xy_clamps_to_audio_bounds():
+    audio = np.arange(10, dtype=np.float32)
+    xs, ys = samples_to_xy(audio, sample_rate=10, start_sample=-3, end_sample=4)
+    assert np.array_equal(ys, [0, 1, 2, 3])
+    assert np.allclose(xs, [0.0, 0.1, 0.2, 0.3])

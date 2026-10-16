@@ -18,6 +18,7 @@ class PeakLevel:
 class WaveformCache:
     sample_rate: int
     levels: list[PeakLevel]  # sorted by increasing bucket_size
+    peak: float  # max absolute sample value over the whole file
 
     def level_for_samples_per_pixel(self, samples_per_pixel: float) -> PeakLevel:
         """The coarsest level whose bucket_size doesn't exceed samples_per_pixel
@@ -44,13 +45,29 @@ def level_to_xy(level: PeakLevel, sample_rate: int) -> tuple[np.ndarray, np.ndar
     return xs, ys
 
 
+def samples_to_xy(
+    audio: np.ndarray, sample_rate: int, start_sample: int, end_sample: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """A (xs, ys) pair of raw samples in [start_sample, end_sample) for a
+    connected line plot — used once zoomed in past the finest peak level,
+    where per-bucket min/max segments would be wider than a pixel and
+    render as disconnected vertical bars."""
+    start = max(0, start_sample)
+    end = min(len(audio), end_sample)
+    if end <= start:
+        return np.empty(0), np.empty(0)
+    xs = np.arange(start, end) / sample_rate
+    return xs, audio[start:end]
+
+
 def build_waveform_cache(
     audio: np.ndarray,
     sample_rate: int,
     bucket_sizes: tuple[int, ...] = DEFAULT_BUCKET_SIZES,
 ) -> WaveformCache:
     levels = [_build_level(audio, size) for size in sorted(bucket_sizes)]
-    return WaveformCache(sample_rate=sample_rate, levels=levels)
+    peak = float(np.abs(audio).max()) if len(audio) else 0.0
+    return WaveformCache(sample_rate=sample_rate, levels=levels, peak=peak)
 
 
 def _build_level(audio: np.ndarray, bucket_size: int) -> PeakLevel:
