@@ -8,10 +8,11 @@ import numpy as np
 import soundfile as sf
 
 from beatgrid.audio.loader import LoadedAudio
-from beatgrid.grid.model import BeatGrid
-from beatgrid.grid.timeline import project_time_to_stem_time
+from beatgrid.grid.model import Beat, BeatGrid
+from beatgrid.grid.timeline import project_time_to_stem_sample
 from beatgrid.project.models import Project, Stem, WarpRender
-from beatgrid.render.engines.base import TimeStretcher
+from beatgrid.render.engines.base import TimemapStretcher, TimeStretcher
+from beatgrid.render.timemap import build_timemap
 
 CROSSFADE_SEC = 0.008
 
@@ -77,13 +78,13 @@ def warp_stem_audio(
     pieces: list[np.ndarray] = []
 
     if segments:
-        lead_in_end = _to_stem_sample(segments[0].start_sec, stem, sample_rate)
+        lead_in_end = project_time_to_stem_sample(segments[0].start_sec, stem, sample_rate)
         if lead_in_end > 0:
             pieces.append(audio[: min(lead_in_end, len(audio))])
 
     for segment in segments:
-        start_sample = _to_stem_sample(segment.start_sec, stem, sample_rate)
-        end_sample = _to_stem_sample(segment.end_sec, stem, sample_rate)
+        start_sample = project_time_to_stem_sample(segment.start_sec, stem, sample_rate)
+        end_sample = project_time_to_stem_sample(segment.end_sec, stem, sample_rate)
         start_sample = max(0, start_sample)
         end_sample = min(len(audio), end_sample)
         if end_sample <= start_sample or segment.beat_count <= 0:
@@ -97,28 +98,57 @@ def warp_stem_audio(
         pieces.append(_fit_to_length(stretched, round(ideal_duration * sample_rate)))
 
     if segments:
-        tail_start = _to_stem_sample(segments[-1].end_sec, stem, sample_rate)
+        tail_start = project_time_to_stem_sample(segments[-1].end_sec, stem, sample_rate)
         if 0 <= tail_start < len(audio):
             pieces.append(audio[tail_start:])
 
     return _concatenate_with_crossfade(pieces, sample_rate, crossfade_sec)
 
 
+def warp_stem_audio_timemap(
+    audio: np.ndarray,
+    sample_rate: int,
+    stem: Stem,
+    beats: list[Beat],
+    target_bpm: float,
+    engine: TimemapStretcher,
+) -> np.ndarray:
+    """Time-stretch one stem's audio in a single, phase-continuous pass via
+    a native timemap (render/timemap.py) — the M9 production path, used
+    instead of warp_stem_audio()'s manual segment-splitting/crossfading for
+    engines that support it (TimemapStretcher)."""
+    timemap = build_timemap(beats, stem, sample_rate, target_bpm, total_samples=len(audio))
+    return engine.stretch_with_timemap(audio, sample_rate, timemap)
+
+
 def render_warp(
     project: Project,
     target_bpm: float,
-    engine: TimeStretcher,
+    engine: TimeStretcher | TimemapStretcher,
     output_dir: Path,
     audio_by_stem: dict[str, LoadedAudio],
 ) -> WarpRender:
     """Warp every stem in `project` to `target_bpm` and write each to a new,
     non-destructive file under `output_dir` — the originals are never
     touched. Returns a WarpRender describing the result, for the caller to
-    append to Project.warp_renders."""
+    append to Project.warp_renders.
+
+    Dispatches to the native-timemap path (warp_stem_audio_timemap) when
+    `engine` supports it (the M9 production engine), otherwise falls back to
+    the segment+crossfade path (warp_stem_audio, M8's prototype engine).
+    """
     reference_stem = project.reference_stem()
-    segments = build_segment_plan(project.grid, end_time_sec=reference_stem.duration_sec)
-    if not segments:
-        raise ValueError("project has no anchors to warp from")
+    end_time_sec = reference_stem.duration_sec
+    uses_timemap = hasattr(engine, "stretch_with_timemap")
+
+    if uses_timemap:
+        beats = project.grid.generate_beats(end_time_sec=end_time_sec)
+        if not beats:
+            raise ValueError("project has no anchors to warp from")
+    else:
+        segments = build_segment_plan(project.grid, end_time_sec=end_time_sec)
+        if not segments:
+            raise ValueError("project has no anchors to warp from")
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -126,9 +156,14 @@ def render_warp(
     output_paths: dict[str, Path] = {}
     for stem in project.stems:
         loaded = audio_by_stem[stem.id]
-        warped = warp_stem_audio(
-            loaded.audio, loaded.sample_rate, stem, segments, target_bpm, engine
-        )
+        if uses_timemap:
+            warped = warp_stem_audio_timemap(
+                loaded.audio, loaded.sample_rate, stem, beats, target_bpm, engine
+            )
+        else:
+            warped = warp_stem_audio(
+                loaded.audio, loaded.sample_rate, stem, segments, target_bpm, engine
+            )
         out_path = output_dir / f"{stem.id}_warped.wav"
         sf.write(out_path, warped, loaded.sample_rate)
         output_paths[stem.id] = out_path
@@ -139,10 +174,6 @@ def render_warp(
         rendered_at=datetime.now(),
         output_paths=output_paths,
     )
-
-
-def _to_stem_sample(project_time_sec: float, stem: Stem, sample_rate: int) -> int:
-    return round(project_time_to_stem_time(project_time_sec, stem) * sample_rate)
 
 
 def _fit_to_length(audio: np.ndarray, target_length: int) -> np.ndarray:

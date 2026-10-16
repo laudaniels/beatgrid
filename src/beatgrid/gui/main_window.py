@@ -616,18 +616,22 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Could not export grid", str(exc))
 
     def _on_open_warp_dialog(self) -> None:
-        """Variant B prototype: warp every stem to a fixed tempo. See
-        render/warp_renderer.py for the actual algorithm (GUI-independent)
-        and PLAN.md for why pedalboard is the prototype engine, not the
-        production one."""
+        """Variant B: warp every stem to a fixed tempo. See
+        render/warp_renderer.py for the actual algorithm (GUI-independent).
+        Defaults to the M9 production engine (rubberband-timemap) when
+        installed, falling back to the M8 prototype (pedalboard) otherwise —
+        both are offered in the dialog's engine picker; see PLAN.md for the
+        license trade-off between them."""
         if self._controller is None:
             return
         default_bpm = self._controller.project.grid.anchors[0].bpm
         dialog = WarpDialog(default_bpm, parent=self)
-        dialog.render_requested.connect(lambda bpm: self._on_warp_requested(dialog, bpm))
+        dialog.render_requested.connect(
+            lambda bpm, engine_name: self._on_warp_requested(dialog, bpm, engine_name)
+        )
         dialog.exec()
 
-    def _on_warp_requested(self, dialog: WarpDialog, target_bpm: float) -> None:
+    def _on_warp_requested(self, dialog: WarpDialog, target_bpm: float, engine_name: str) -> None:
         assert self._controller is not None
         project = self._controller.project
         reference_stem = project.reference_stem()
@@ -635,7 +639,7 @@ class MainWindow(QMainWindow):
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            engine = get_engine()
+            engine = get_engine(engine_name)
             warp_render = render_warp(project, target_bpm, engine, output_dir, self._audio)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
             dialog.show_error(str(exc))

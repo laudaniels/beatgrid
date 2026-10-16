@@ -503,7 +503,7 @@ def test_warp_requested_success_adds_warp_render_and_shows_result(qtbot, tmp_pat
     dialog = WarpDialog(120.0)
     qtbot.addWidget(dialog)
 
-    window._on_warp_requested(dialog, 130.0)
+    window._on_warp_requested(dialog, 130.0, "pedalboard")
 
     assert window.controller.project.warp_renders == [fake_warp_render]
     assert "Done" in dialog.status_label.text()
@@ -525,7 +525,7 @@ def test_warp_requested_failure_shows_error_in_dialog(qtbot, tmp_path, monkeypat
     dialog = WarpDialog(120.0)
     qtbot.addWidget(dialog)
 
-    window._on_warp_requested(dialog, 130.0)
+    window._on_warp_requested(dialog, 130.0, "pedalboard")
 
     assert window.controller.project.warp_renders == []
     assert "Failed" in dialog.status_label.text()

@@ -25,14 +25,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # Extend with `--extra warp` once M9 lands; that also needs
-      # `apt-get install rubberband-cli` for test_warp_renderer_rubberband.py.
       - name: Cache Beat This! model checkpoint
         uses: actions/cache@v4
         with:
           path: ~/.cache/torch/hub/checkpoints
           key: torch-hub-beat-this-${{ runner.os }}
-      - run: uv sync --extra core --extra warp-prototype --extra dev
+      - name: Install rubberband-cli (M9 production warp engine)
+        run: sudo apt-get update && sudo apt-get install -y rubberband-cli
+      - run: uv sync --extra core --extra warp-prototype --extra warp --extra dev
       - run: uv run pytest -m "not gui"
 
   test-gui:

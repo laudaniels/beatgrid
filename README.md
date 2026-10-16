@@ -10,7 +10,7 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
 
 ## Status
 
-Through M8: load multiple stems, see their waveforms stacked with a shared
+Through M9: load multiple stems, see their waveforms stacked with a shared
 grid, drag anchors on the reference stem to reposition the grid, run
 automatic BPM/beat detection ("Detect"), see non-blocking warnings when
 stems' sample rate/length/offset look inconsistent, propose cross-correlation
@@ -21,16 +21,17 @@ without ever correcting it, add/remove anchors for tracks with tempo drift,
 play the mixed stems back with mute/solo respected, a sample-accurate
 metronome click and a synced playhead, save/open the full project
 (`.beatgrid`), export the grid as JSON (schema in `docs/EXPORT_SCHEMA.md`),
-and warp all stems to a fixed tempo ("Warp..." — Variant B *prototype*: a
-constant-ratio-per-segment engine with crossfaded splices, written to
-`<stem_dir>/warped/`, never touching the originals). The M9 production
-engine (native piecewise warping, lower GPL exposure) hasn't started yet —
-see the milestones in `PLAN.md`.
+and warp all stems to a fixed tempo ("Warp..." — written to
+`<stem_dir>/warped/`, never touching the originals, with a choice of engine:
+**rubberband-timemap**, the default production engine, native
+phase-continuous piecewise warping in one pass; or **pedalboard**, the M8
+prototype, constant-ratio-per-segment with crossfaded splices). See the
+license trade-off between the two engines in `PLAN.md`.
 
 ## Running the app
 
 ```bash
-uv sync --extra core --extra gui --extra warp-prototype --extra dev
+uv sync --extra core --extra gui --extra warp-prototype --extra warp --extra dev
 uv run python -m beatgrid.gui.app
 ```
 
@@ -43,9 +44,11 @@ tests via `QT_QPA_PLATFORM=offscreen uv run pytest tests/gui -m gui`.
 Detection-related tests (`uv run pytest -m "not gui"`) need the `core` extra
 (`uv sync --extra core`); the first run downloads and caches the Beat This!
 model checkpoint (~tens of MB) from the CPJKU cloud. Warp-related tests need
-the `warp-prototype` extra (`uv sync --extra warp-prototype`). Warping a
-multi-minute multi-stem project is slow (tens of seconds) — this is a
-prototype engine, not yet optimized.
+the `warp-prototype` extra (pedalboard) and/or the `warp` extra
+(pyrubberband, plus `rubberband-cli` on `PATH` — see Prerequisites); each
+gracefully skips if its dependency isn't installed. Warping a multi-minute
+multi-stem project is slow (tens of seconds) with either engine — this
+hasn't been optimized for speed yet.
 
 ## Prerequisites
 
@@ -58,10 +61,13 @@ on your system `PATH`:
 - **PyTorch** (installed automatically via the `beat-this` dependency) is a
   heavier install than the rest of the stack — CPU inference is fine, this is
   one-off analysis, not realtime.
-- **rubberband-cli** — only needed for the production warp/time-stretch engine
-  (Variant B, milestone M9). Install via your system package manager (e.g.
-  `apt install rubberband-cli` / `brew install rubberband`). It is GPL-licensed
-  and invoked as a separate process — see the license trade-off in `PLAN.md`.
+- **rubberband-cli** — needed for the default production warp/time-stretch
+  engine (`rubberband-timemap`). Install via your system package manager
+  (e.g. `apt install rubberband-cli` / `brew install rubberband`). It is
+  GPL-licensed and invoked as a separate process, which is why it's lower
+  license-risk for our own MIT code than the `pedalboard` alternative engine
+  (GPL-3.0 as a whole) — see the trade-off in `PLAN.md`. Without it, warping
+  falls back to `pedalboard` if that's installed.
 
 ## Development
 

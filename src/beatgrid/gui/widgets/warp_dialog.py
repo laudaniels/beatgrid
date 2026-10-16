@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
@@ -14,15 +15,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from beatgrid.render.engines.registry import available_engines
+
 
 class WarpDialog(QDialog):
-    """Pick a target BPM and trigger a warp render (Variant B). This is just
-    the target-BPM picker + a results display — the actual rendering is
-    driven by the caller (MainWindow) via `render_requested`, and the render
-    logic itself lives entirely in render/warp_renderer.py, independent of
-    the GUI."""
+    """Pick a target BPM and engine, then trigger a warp render (Variant B).
+    This is just the target-BPM/engine picker + a results display — the
+    actual rendering is driven by the caller (MainWindow) via
+    `render_requested`, and the render logic itself lives entirely in
+    render/warp_renderer.py, independent of the GUI."""
 
-    render_requested = Signal(float)  # target_bpm
+    render_requested = Signal(float, str)  # target_bpm, engine_name
 
     def __init__(self, default_bpm: float, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -33,8 +36,12 @@ class WarpDialog(QDialog):
         self.bpm_spinbox.setDecimals(2)
         self.bpm_spinbox.setValue(default_bpm)
 
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItems(available_engines())
+
         form = QFormLayout()
         form.addRow("Target BPM:", self.bpm_spinbox)
+        form.addRow("Engine:", self.engine_combo)
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
@@ -57,6 +64,10 @@ class WarpDialog(QDialog):
     def target_bpm(self) -> float:
         return self.bpm_spinbox.value()
 
+    @property
+    def engine_name(self) -> str:
+        return self.engine_combo.currentText()
+
     def show_result(self, output_paths: dict[str, Path]) -> None:
         lines = "\n".join(f"{stem_id}: {path}" for stem_id, path in output_paths.items())
         self.status_label.setText(f"Done:\n{lines}")
@@ -65,4 +76,4 @@ class WarpDialog(QDialog):
         self.status_label.setText(f"Failed: {message}")
 
     def _on_render_clicked(self) -> None:
-        self.render_requested.emit(self.target_bpm)
+        self.render_requested.emit(self.target_bpm, self.engine_name)

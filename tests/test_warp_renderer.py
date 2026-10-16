@@ -217,6 +217,105 @@ def test_render_warp_writes_non_destructive_files_and_returns_warp_render(tmp_pa
     assert len(kick_out) == len(bass_out)
 
 
+def _impulse_track(positions: list[int], length: int) -> np.ndarray:
+    """A clean impulse train (not a click burst) for measuring exactly where
+    content ends up after stretching — a single-sample peak is much easier
+    to pinpoint precisely than a windowed click, isolating the warp engine's
+    own fidelity from any onset-detector imprecision."""
+    audio = np.zeros(length, dtype=np.float32)
+    for position in positions:
+        if 0 <= position < length:
+            audio[position] = 1.0
+    return audio
+
+
+def _rubberband_available() -> bool:
+    import shutil
+
+    try:
+        import pyrubberband  # noqa: F401
+    except ImportError:
+        return False
+    return shutil.which("rubberband") is not None
+
+
+requires_rubberband = pytest.mark.skipif(
+    not _rubberband_available(), reason="pyrubberband/rubberband-cli not installed"
+)
+
+
+@requires_rubberband
+def test_render_warp_rubberband_anchors_land_sample_accurately_and_stems_match_length(tmp_path):
+    from beatgrid.audio.loader import LoadedAudio
+    from beatgrid.render.engines.rubberband_timemap_stretcher import RubberbandTimemapStretcher
+
+    sample_rate = 22050
+    duration_sec = 6.0
+    length = round(duration_sec * sample_rate)
+    bpm = 118.0  # deliberately not a round number, like a real detected tempo
+    target_bpm = 120.0
+    interval_samples = 60.0 / bpm * sample_rate
+    positions = [round(i * interval_samples) for i in range(12)]
+
+    track_kick = _impulse_track(positions, length)
+    track_bass = _impulse_track(positions, length)  # same grid, independent "stem"
+
+    kick_path = tmp_path / "kick.wav"
+    bass_path = tmp_path / "bass.wav"
+    sf.write(kick_path, track_kick, sample_rate)
+    sf.write(bass_path, track_bass, sample_rate)
+
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(0.0, 0, bpm)], sample_rate=sample_rate
+    )
+    stems = [
+        Stem(id="kick", path=kick_path, sample_rate=sample_rate, duration_sec=duration_sec),
+        Stem(id="bass", path=bass_path, sample_rate=sample_rate, duration_sec=duration_sec),
+    ]
+    project = Project(name="t", stems=stems, reference_stem_id="kick", grid=grid)
+    audio_by_stem = {
+        "kick": LoadedAudio(audio=track_kick, sample_rate=sample_rate),
+        "bass": LoadedAudio(audio=track_bass, sample_rate=sample_rate),
+    }
+
+    result = render_warp(
+        project,
+        target_bpm=target_bpm,
+        engine=RubberbandTimemapStretcher(),
+        output_dir=tmp_path / "warped",
+        audio_by_stem=audio_by_stem,
+    )
+    assert result.engine == "rubberband-timemap"
+
+    # (a) anchors land sample-accurately on the *fixed-tempo* grid position
+    # -- i.e. where build_timemap told the engine to put them, not their
+    # original (pre-warp) position. A phase-vocoder engine introduces a
+    # small, roughly constant processing latency (observed ~9ms on this
+    # engine/signal) relative to that target, which this allows for.
+    beats = grid.generate_beats(end_time_sec=duration_sec)
+    ideal_interval_samples = 60.0 / target_bpm * sample_rate
+    first_target = beats[0].sample_index  # the first beat's own position is unchanged
+    expected_targets = [
+        round(first_target + (beat.index - beats[0].index) * ideal_interval_samples)
+        for beat in beats
+    ]
+
+    kick_out, _ = sf.read(result.output_paths["kick"], dtype="float32")
+    search_window = round(0.015 * sample_rate)  # 15ms, comfortably covers the latency
+    detected_peaks = []
+    for expected in expected_targets:
+        lo, hi = max(0, expected - search_window), min(len(kick_out), expected + search_window)
+        detected_peaks.append(lo + int(np.argmax(np.abs(kick_out[lo:hi]))))
+
+    deviations = np.abs(np.array(detected_peaks) - np.array(expected_targets))
+    assert np.all(deviations < sample_rate * 0.012)  # within ~12ms of the ideal grid position
+
+    # (b) all stretched stems come out exactly the same length
+    kick_frames = sf.info(result.output_paths["kick"]).frames
+    bass_frames = sf.info(result.output_paths["bass"]).frames
+    assert kick_frames == bass_frames
+
+
 def test_render_warp_raises_without_anchors(tmp_path):
     grid = BeatGrid(time_signature=TimeSignature(), anchors=[], sample_rate=44100)
     stem = Stem(id="s", path=tmp_path / "s.wav", sample_rate=44100, duration_sec=1.0)

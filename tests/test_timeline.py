@@ -25,6 +25,13 @@ def test_project_time_to_stem_sample_with_offset():
     assert project_time_to_stem_sample(1.0, stem) == 22050
 
 
+def test_project_time_to_stem_sample_explicit_sample_rate_overrides_stem_metadata():
+    # the Stem's own sample_rate metadata says 44100, but the caller holds a
+    # buffer actually loaded at 22050 -- the explicit rate must win.
+    stem = _stem(sample_rate=44100, start_offset_sec=0.0)
+    assert project_time_to_stem_sample(1.0, stem, sample_rate=22050) == 22050
+
+
 def test_roundtrip_sample_to_time_to_sample():
     stem = _stem(sample_rate=48000, start_offset_sec=-0.25)
     sample = 12000
