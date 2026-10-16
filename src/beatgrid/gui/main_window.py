@@ -24,6 +24,7 @@ from beatgrid.audio.validation import validate_stems
 from beatgrid.detection.refine import propose_anchor
 from beatgrid.detection.registry import available_detectors, get_detector
 from beatgrid.detection.transient import compute_drift, detect_transients
+from beatgrid.export.registry import get_exporter
 from beatgrid.grid.model import Anchor, Beat, BeatGrid, TimeSignature
 from beatgrid.grid.timeline import project_time_to_stem_time
 from beatgrid.gui.controllers.project_controller import ProjectController
@@ -33,6 +34,7 @@ from beatgrid.gui.widgets.anchor_item import AnchorItem
 from beatgrid.gui.widgets.stem_track_view import StemTrackView
 from beatgrid.gui.widgets.transport_bar import TransportBar
 from beatgrid.project.models import Project, Stem
+from beatgrid.project.project_io import load_project, save_project
 
 DEFAULT_BPM = 120.0
 DRIFT_THRESHOLD_SEC = 0.02
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self._show_drift = False
         self._selected_anchor_id: str | None = None
         self._audio_player: AudioPlayer | None = None
+        self._current_project_path: Path | None = None
 
         self._playhead_timer = QTimer(self)
         self._playhead_timer.setInterval(PLAYHEAD_TIMER_INTERVAL_MS)
@@ -75,6 +78,18 @@ class MainWindow(QMainWindow):
         load_action = QAction("Load stems...", self)
         load_action.triggered.connect(self._on_load_stems)
         toolbar.addAction(load_action)
+
+        open_project_action = QAction("Open project...", self)
+        open_project_action.triggered.connect(self._on_open_project)
+        toolbar.addAction(open_project_action)
+
+        save_project_action = QAction("Save project...", self)
+        save_project_action.triggered.connect(self._on_save_project)
+        toolbar.addAction(save_project_action)
+
+        export_action = QAction("Export grid...", self)
+        export_action.triggered.connect(self._on_export_grid)
+        toolbar.addAction(export_action)
 
         toolbar.addWidget(QLabel(" Reference stem: "))
         self.reference_combo = QComboBox()
@@ -177,8 +192,20 @@ class MainWindow(QMainWindow):
             grid=grid,
             created_at=datetime.now(),
         )
+        self._current_project_path = None
+        self._activate_project(project, audio_by_id)
 
-        warnings = validate_stems(stems, reference_stem_id=project.reference_stem_id)
+    def open_project(self, path: Path) -> None:
+        """Load a previously saved .beatgrid project file: re-reads each
+        stem's audio from its stored path and restores the full grid
+        (anchors, offsets, mute/solo) exactly as saved."""
+        project = load_project(path)
+        audio_by_id = {stem.id: load_audio(stem.path) for stem in project.stems}
+        self._current_project_path = path
+        self._activate_project(project, audio_by_id)
+
+    def _activate_project(self, project: Project, audio_by_id: dict[str, LoadedAudio]) -> None:
+        warnings = validate_stems(project.stems, reference_stem_id=project.reference_stem_id)
 
         if self._audio_player is not None:
             self._audio_player.stop()
@@ -188,8 +215,8 @@ class MainWindow(QMainWindow):
         self._audio = audio_by_id
         self._transients_by_stem = {}
         self._show_drift = False
-        self._selected_anchor_id = grid.anchors[0].id
-        self._audio_player = AudioPlayer(sample_rate=grid.sample_rate)
+        self._selected_anchor_id = project.grid.anchors[0].id
+        self._audio_player = AudioPlayer(sample_rate=project.grid.sample_rate)
         self.drift_action.blockSignals(True)
         self.drift_action.setChecked(False)
         self.drift_action.blockSignals(False)
@@ -538,3 +565,44 @@ class MainWindow(QMainWindow):
             view = self._track_views.get(stem.id)
             if view is not None:
                 view.set_playhead(project_time_to_stem_time(project_time, stem))
+
+    def _on_open_project(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open project", "", "BeatGrid project (*.beatgrid)"
+        )
+        if not path:
+            return
+        try:
+            self.open_project(Path(path))
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+            QMessageBox.warning(self, "Could not open project", str(exc))
+
+    def _on_save_project(self) -> None:
+        if self._controller is None:
+            return
+        default_path = str(
+            self._current_project_path or f"{self._controller.project.name}.beatgrid"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save project", default_path, "BeatGrid project (*.beatgrid)"
+        )
+        if not path:
+            return
+        try:
+            save_project(self._controller.project, Path(path))
+        except OSError as exc:
+            QMessageBox.warning(self, "Could not save project", str(exc))
+            return
+        self._current_project_path = Path(path)
+
+    def _on_export_grid(self) -> None:
+        if self._controller is None:
+            return
+        default_path = f"{self._controller.project.name}.json"
+        path, _ = QFileDialog.getSaveFileName(self, "Export grid", default_path, "JSON (*.json)")
+        if not path:
+            return
+        try:
+            get_exporter("json").export(self._controller.project, Path(path))
+        except OSError as exc:
+            QMessageBox.warning(self, "Could not export grid", str(exc))

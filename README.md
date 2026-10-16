@@ -10,7 +10,7 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
 
 ## Status
 
-Through M6: load multiple stems, see their waveforms stacked with a shared
+Through M7: load multiple stems, see their waveforms stacked with a shared
 grid, drag anchors on the reference stem to reposition the grid, run
 automatic BPM/beat detection ("Detect"), see non-blocking warnings when
 stems' sample rate/length/offset look inconsistent, propose cross-correlation
@@ -18,9 +18,11 @@ based start offsets ("Detect offsets" — always a proposal you confirm, never
 applied automatically), mute/solo per stem, toggle a diagnostic "Show drift"
 overlay that marks where a stem's own transients stray from the shared grid
 without ever correcting it, add/remove anchors for tracks with tempo drift,
-and play the mixed stems back with mute/solo respected, a sample-accurate
-metronome click, and a playhead synced across every row. Variant B
-(warp/time-stretch) hasn't started yet — see the milestones in `PLAN.md`.
+play the mixed stems back with mute/solo respected, a sample-accurate
+metronome click and a synced playhead, save/open the full project
+(`.beatgrid`), and export the grid as JSON (schema in
+`docs/EXPORT_SCHEMA.md`). Variant B (warp/time-stretch) hasn't started yet —
+see the milestones in `PLAN.md`.
 
 ## Running the app
 

@@ -389,6 +389,79 @@ def test_update_playhead_positions_accounts_for_stem_offset(qtbot, tmp_path):
     assert window.track_views["bass"].playhead_time == pytest.approx(0.4)
 
 
+def test_save_then_open_project_restores_grid_state(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    anchor_id = window.controller.project.grid.anchors[0].id
+    window.controller.move_anchor(anchor_id, 0.3)
+    window.controller.set_anchor_bpm(anchor_id, 135.0)
+    window.controller.set_stem_muted("bass", True)
+
+    project_path = tmp_path / "project.beatgrid"
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(project_path), ""),
+    )
+    window._on_save_project()
+    assert project_path.exists()
+
+    reopened = MainWindow()
+    qtbot.addWidget(reopened)
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(project_path), ""),
+    )
+    reopened._on_open_project()
+
+    anchor = reopened.controller.project.grid.anchors[0]
+    assert anchor.time_sec == pytest.approx(0.3)
+    assert anchor.bpm == pytest.approx(135.0)
+    bass_stem = next(s for s in reopened.controller.project.stems if s.id == "bass")
+    assert bass_stem.muted is True
+
+
+def test_open_project_shows_warning_on_failure(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    missing_path = tmp_path / "does-not-exist.beatgrid"
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QFileDialog.getOpenFileName",
+        lambda *a, **k: (str(missing_path), ""),
+    )
+    warned = []
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QMessageBox.warning",
+        lambda *a, **k: warned.append(True),
+    )
+
+    window._on_open_project()  # must not raise
+
+    assert warned == [True]
+
+
+def test_export_grid_writes_json(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    export_path = tmp_path / "grid.json"
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(export_path), ""),
+    )
+
+    window._on_export_grid()
+
+    import json
+
+    data = json.loads(export_path.read_text())
+    assert data["schema_version"] == 1
+    assert data["reference_stem"]["id"] == "kick"
+
+
 def test_playhead_tick_stops_itself_when_player_is_not_playing(qtbot, tmp_path):
     window = MainWindow()
     qtbot.addWidget(window)
