@@ -33,8 +33,11 @@ from beatgrid.gui.playback.metronome import build_metronome
 from beatgrid.gui.widgets.anchor_item import AnchorItem
 from beatgrid.gui.widgets.stem_track_view import StemTrackView
 from beatgrid.gui.widgets.transport_bar import TransportBar
+from beatgrid.gui.widgets.warp_dialog import WarpDialog
 from beatgrid.project.models import Project, Stem
 from beatgrid.project.project_io import load_project, save_project
+from beatgrid.render.engines.registry import get_engine
+from beatgrid.render.warp_renderer import render_warp
 
 DEFAULT_BPM = 120.0
 DRIFT_THRESHOLD_SEC = 0.02
@@ -125,6 +128,11 @@ class MainWindow(QMainWindow):
         remove_anchor_action.setToolTip("Remove the selected anchor (click an anchor to select it)")
         remove_anchor_action.triggered.connect(self._on_remove_anchor)
         toolbar.addAction(remove_anchor_action)
+
+        warp_action = QAction("Warp...", self)
+        warp_action.setToolTip("Warp/time-stretch all stems to a fixed tempo (prototype engine)")
+        warp_action.triggered.connect(self._on_open_warp_dialog)
+        toolbar.addAction(warp_action)
 
     def _build_central_widget(self) -> None:
         tracks_container = QWidget()
@@ -606,3 +614,34 @@ class MainWindow(QMainWindow):
             get_exporter("json").export(self._controller.project, Path(path))
         except OSError as exc:
             QMessageBox.warning(self, "Could not export grid", str(exc))
+
+    def _on_open_warp_dialog(self) -> None:
+        """Variant B prototype: warp every stem to a fixed tempo. See
+        render/warp_renderer.py for the actual algorithm (GUI-independent)
+        and PLAN.md for why pedalboard is the prototype engine, not the
+        production one."""
+        if self._controller is None:
+            return
+        default_bpm = self._controller.project.grid.anchors[0].bpm
+        dialog = WarpDialog(default_bpm, parent=self)
+        dialog.render_requested.connect(lambda bpm: self._on_warp_requested(dialog, bpm))
+        dialog.exec()
+
+    def _on_warp_requested(self, dialog: WarpDialog, target_bpm: float) -> None:
+        assert self._controller is not None
+        project = self._controller.project
+        reference_stem = project.reference_stem()
+        output_dir = reference_stem.path.parent / "warped"
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            engine = get_engine()
+            warp_render = render_warp(project, target_bpm, engine, output_dir, self._audio)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+            dialog.show_error(str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        self._controller.add_warp_render(warp_render)
+        dialog.show_result(warp_render.output_paths)

@@ -32,7 +32,7 @@ jobs:
         with:
           path: ~/.cache/torch/hub/checkpoints
           key: torch-hub-beat-this-${{ runner.os }}
-      - run: uv sync --extra core --extra dev
+      - run: uv sync --extra core --extra warp-prototype --extra dev
       - run: uv run pytest -m "not gui"
 
   test-gui:

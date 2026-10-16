@@ -462,6 +462,75 @@ def test_export_grid_writes_json(qtbot, tmp_path, monkeypatch):
     assert data["reference_stem"]["id"] == "kick"
 
 
+def test_open_warp_dialog_prefills_default_bpm_from_first_anchor(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+    window.controller.set_anchor_bpm(window.controller.project.grid.anchors[0].id, 95.0)
+
+    captured = {}
+
+    def fake_exec(self):
+        captured["bpm"] = self.target_bpm
+        return 0
+
+    monkeypatch.setattr("beatgrid.gui.widgets.warp_dialog.WarpDialog.exec", fake_exec)
+
+    window._on_open_warp_dialog()
+
+    assert captured["bpm"] == pytest.approx(95.0)
+
+
+def test_warp_requested_success_adds_warp_render_and_shows_result(qtbot, tmp_path, monkeypatch):
+    from datetime import datetime
+
+    from beatgrid.gui.widgets.warp_dialog import WarpDialog
+    from beatgrid.project.models import WarpRender
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    fake_warp_render = WarpRender(
+        target_bpm=130.0,
+        engine="pedalboard",
+        rendered_at=datetime.now(),
+        output_paths={"kick": tmp_path / "kick_warped.wav"},
+    )
+    monkeypatch.setattr("beatgrid.gui.main_window.get_engine", lambda name=None: object())
+    monkeypatch.setattr("beatgrid.gui.main_window.render_warp", lambda *a, **k: fake_warp_render)
+
+    dialog = WarpDialog(120.0)
+    qtbot.addWidget(dialog)
+
+    window._on_warp_requested(dialog, 130.0)
+
+    assert window.controller.project.warp_renders == [fake_warp_render]
+    assert "Done" in dialog.status_label.text()
+
+
+def test_warp_requested_failure_shows_error_in_dialog(qtbot, tmp_path, monkeypatch):
+    from beatgrid.gui.widgets.warp_dialog import WarpDialog
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    def _boom(*a, **k):
+        raise ValueError("no anchors to warp from")
+
+    monkeypatch.setattr("beatgrid.gui.main_window.get_engine", lambda name=None: object())
+    monkeypatch.setattr("beatgrid.gui.main_window.render_warp", _boom)
+
+    dialog = WarpDialog(120.0)
+    qtbot.addWidget(dialog)
+
+    window._on_warp_requested(dialog, 130.0)
+
+    assert window.controller.project.warp_renders == []
+    assert "Failed" in dialog.status_label.text()
+
+
 def test_playhead_tick_stops_itself_when_player_is_not_playing(qtbot, tmp_path):
     window = MainWindow()
     qtbot.addWidget(window)

@@ -1,0 +1,232 @@
+from pathlib import Path
+
+import numpy as np
+import pytest
+import soundfile as sf
+from fixtures import make_click_track
+
+from beatgrid.grid.model import Anchor, BeatGrid, TimeSignature
+from beatgrid.project.models import Project, Stem, WarpRender
+from beatgrid.render.warp_renderer import build_segment_plan, render_warp, warp_stem_audio
+
+
+def _anchor(time_sec, beat_index, bpm, anchor_id="a"):
+    return Anchor(
+        id=anchor_id,
+        time_sec=time_sec,
+        sample_index=round(time_sec * 44100),
+        beat_index=beat_index,
+        bpm=bpm,
+    )
+
+
+def test_build_segment_plan_single_anchor():
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(0.0, 0, 120.0)], sample_rate=44100
+    )
+
+    segments = build_segment_plan(grid, end_time_sec=4.0)
+
+    assert len(segments) == 1
+    assert segments[0].start_sec == 0.0
+    assert segments[0].end_sec == 4.0
+    assert segments[0].beat_count == 8  # 120 BPM -> 0.5s/beat -> 8 beats in 4s
+    assert segments[0].bpm == 120.0
+
+
+def test_build_segment_plan_multi_anchor_matches_beat_index_gap():
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4),
+        anchors=[_anchor(0.0, 0, 120.0, "a1"), _anchor(2.0, 4, 100.0, "a2")],
+        sample_rate=44100,
+    )
+
+    segments = build_segment_plan(grid, end_time_sec=3.2)
+
+    assert len(segments) == 2
+    assert segments[0].beat_count == 4
+    assert segments[0].bpm == 120.0
+    assert segments[1].start_sec == 2.0
+    assert segments[1].end_sec == 3.2
+    assert segments[1].bpm == 100.0
+
+
+def test_build_segment_plan_empty_grid():
+    grid = BeatGrid(time_signature=TimeSignature(), anchors=[], sample_rate=44100)
+    assert build_segment_plan(grid, end_time_sec=10.0) == []
+
+
+class _IdentityStretcher:
+    """A no-op stretch engine (resamples via simple repetition/stride) good
+    enough to exercise warp_stem_audio's segment math without pedalboard."""
+
+    name = "identity-ish"
+
+    def stretch(self, audio: np.ndarray, sample_rate: int, ratio: float) -> np.ndarray:
+        target_length = max(1, round(len(audio) * ratio))
+        indices = np.linspace(0, len(audio) - 1, target_length).astype(np.int64)
+        return audio[indices]
+
+
+def test_warp_stem_audio_pins_exact_expected_length():
+    bpm = 120.0
+    target_bpm = 140.0
+    sample_rate = 8000
+    track = make_click_track(bpm=bpm, duration_sec=4.0, sample_rate=sample_rate)
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(0.0, 0, bpm)], sample_rate=sample_rate
+    )
+    segments = build_segment_plan(grid, end_time_sec=4.0)
+    stem = Stem(id="s", path=Path("s.wav"), sample_rate=sample_rate, duration_sec=4.0)
+
+    warped = warp_stem_audio(
+        track.audio, sample_rate, stem, segments, target_bpm, _IdentityStretcher()
+    )
+
+    expected_samples = round(segments[0].beat_count * 60.0 / target_bpm * sample_rate)
+    assert len(warped) == expected_samples
+
+
+def test_warp_stem_audio_preserves_lead_in_and_tail():
+    sample_rate = 8000
+    # anchor starts 1s into the audio, grid covers [1.0, 3.0); audio runs to 4.0s
+    track = make_click_track(
+        bpm=120.0, duration_sec=4.0, sample_rate=sample_rate, start_offset_sec=1.0
+    )
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4),
+        anchors=[_anchor(1.0, 0, 120.0)],
+        sample_rate=sample_rate,
+    )
+    segments = build_segment_plan(grid, end_time_sec=3.0)
+    stem = Stem(id="s", path=Path("s.wav"), sample_rate=sample_rate, duration_sec=4.0)
+
+    warped = warp_stem_audio(track.audio, sample_rate, stem, segments, 120.0, _IdentityStretcher())
+
+    # the last/first few ms of the lead-in/tail are intentionally crossfaded
+    # with the adjacent (stretched) segment to avoid a splice click, so only
+    # compare the parts safely before/after that crossfade zone.
+    from beatgrid.render.warp_renderer import CROSSFADE_SEC
+
+    margin = round(CROSSFADE_SEC * sample_rate) + 10
+    lead_in_samples = round(1.0 * sample_rate)
+    tail_samples = round(1.0 * sample_rate)  # audio from 3.0s to 4.0s
+
+    assert np.array_equal(
+        warped[: lead_in_samples - margin], track.audio[: lead_in_samples - margin]
+    )
+    assert np.array_equal(
+        warped[-(tail_samples - margin) :], track.audio[-(tail_samples - margin) :]
+    )
+
+
+def test_warp_stem_audio_all_stems_same_length_for_shared_segments():
+    bpm = 120.0
+    target_bpm = 128.0
+    sample_rate = 8000
+    duration = 4.0
+    track_a = make_click_track(bpm=bpm, duration_sec=duration, sample_rate=sample_rate)
+    track_b = make_click_track(
+        bpm=bpm, duration_sec=duration, sample_rate=sample_rate, noise_level=0.01, seed=1
+    )
+
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(0.0, 0, bpm)], sample_rate=sample_rate
+    )
+    segments = build_segment_plan(grid, end_time_sec=duration)
+    stem_a = Stem(id="a", path=Path("a.wav"), sample_rate=sample_rate, duration_sec=duration)
+    stem_b = Stem(id="b", path=Path("b.wav"), sample_rate=sample_rate, duration_sec=duration)
+
+    engine = _IdentityStretcher()
+    warped_a = warp_stem_audio(track_a.audio, sample_rate, stem_a, segments, target_bpm, engine)
+    warped_b = warp_stem_audio(track_b.audio, sample_rate, stem_b, segments, target_bpm, engine)
+
+    assert len(warped_a) == len(warped_b)
+
+
+def test_warp_stem_audio_with_pedalboard_matches_target_duration():
+    pytest.importorskip("pedalboard")
+    from beatgrid.render.engines.pedalboard_stretcher import PedalboardStretcher
+
+    bpm = 120.0
+    target_bpm = 140.0
+    sample_rate = 22050
+    track = make_click_track(bpm=bpm, duration_sec=4.0, sample_rate=sample_rate)
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(0.0, 0, bpm)], sample_rate=sample_rate
+    )
+    segments = build_segment_plan(grid, end_time_sec=4.0)
+    stem = Stem(id="s", path=Path("s.wav"), sample_rate=sample_rate, duration_sec=4.0)
+
+    warped = warp_stem_audio(
+        track.audio, sample_rate, stem, segments, target_bpm, PedalboardStretcher()
+    )
+
+    expected_samples = round(segments[0].beat_count * 60.0 / target_bpm * sample_rate)
+    assert len(warped) == expected_samples
+
+
+def test_render_warp_writes_non_destructive_files_and_returns_warp_render(tmp_path):
+    pytest.importorskip("pedalboard")
+    from beatgrid.audio.loader import LoadedAudio
+    from beatgrid.render.engines.pedalboard_stretcher import PedalboardStretcher
+
+    sample_rate = 22050
+    bpm = 120.0
+    track_kick = make_click_track(bpm=bpm, duration_sec=2.0, sample_rate=sample_rate)
+    track_bass = make_click_track(bpm=bpm, duration_sec=2.0, sample_rate=sample_rate, seed=2)
+
+    kick_path = tmp_path / "kick.wav"
+    bass_path = tmp_path / "bass.wav"
+    sf.write(kick_path, track_kick.audio, sample_rate)
+    sf.write(bass_path, track_bass.audio, sample_rate)
+
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(0.0, 0, bpm)], sample_rate=sample_rate
+    )
+    stems = [
+        Stem(id="kick", path=kick_path, sample_rate=sample_rate, duration_sec=2.0),
+        Stem(id="bass", path=bass_path, sample_rate=sample_rate, duration_sec=2.0),
+    ]
+    project = Project(name="t", stems=stems, reference_stem_id="kick", grid=grid)
+    audio_by_stem = {
+        "kick": LoadedAudio(audio=track_kick.audio, sample_rate=sample_rate),
+        "bass": LoadedAudio(audio=track_bass.audio, sample_rate=sample_rate),
+    }
+
+    output_dir = tmp_path / "warped"
+    result = render_warp(
+        project,
+        target_bpm=130.0,
+        engine=PedalboardStretcher(),
+        output_dir=output_dir,
+        audio_by_stem=audio_by_stem,
+    )
+
+    assert isinstance(result, WarpRender)
+    assert result.target_bpm == 130.0
+    assert result.engine == "pedalboard"
+    assert set(result.output_paths) == {"kick", "bass"}
+    for path in result.output_paths.values():
+        assert path.exists()
+    # originals untouched
+    assert sf.info(kick_path).frames == len(track_kick.audio)
+    # both warped files end up the same length
+    kick_out, _ = sf.read(result.output_paths["kick"])
+    bass_out, _ = sf.read(result.output_paths["bass"])
+    assert len(kick_out) == len(bass_out)
+
+
+def test_render_warp_raises_without_anchors(tmp_path):
+    grid = BeatGrid(time_signature=TimeSignature(), anchors=[], sample_rate=44100)
+    stem = Stem(id="s", path=tmp_path / "s.wav", sample_rate=44100, duration_sec=1.0)
+    project = Project(name="t", stems=[stem], reference_stem_id="s", grid=grid)
+
+    with pytest.raises(ValueError):
+        render_warp(
+            project,
+            target_bpm=120.0,
+            engine=_IdentityStretcher(),
+            output_dir=tmp_path,
+            audio_by_stem={},
+        )

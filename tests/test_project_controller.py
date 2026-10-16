@@ -7,7 +7,7 @@ pytest.importorskip("PySide6")
 
 from beatgrid.grid.model import Anchor, BeatGrid, TimeSignature  # noqa: E402
 from beatgrid.gui.controllers.project_controller import ProjectController  # noqa: E402
-from beatgrid.project.models import Project, Stem  # noqa: E402
+from beatgrid.project.models import Project, Stem, WarpRender  # noqa: E402
 
 
 def _controller(*, anchors=None) -> ProjectController:
@@ -95,3 +95,17 @@ def test_move_anchor_renumbers():
     controller.move_anchor("a2", 1.0)
 
     assert controller.project.grid.anchors[1].beat_index == 2  # 1.0s / 0.5s per beat
+
+
+def test_add_warp_render_appends_and_emits():
+    controller = _controller()
+    received = []
+    controller.project_changed.connect(lambda: received.append(True))
+    warp_render = WarpRender(
+        target_bpm=128.0, engine="pedalboard", rendered_at=datetime.now(), output_paths={}
+    )
+
+    controller.add_warp_render(warp_render)
+
+    assert controller.project.warp_renders == [warp_render]
+    assert received == [True]

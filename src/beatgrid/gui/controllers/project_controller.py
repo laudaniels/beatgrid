@@ -5,7 +5,7 @@ from uuid import uuid4
 from PySide6.QtCore import QObject, Signal
 
 from beatgrid.grid.model import Anchor
-from beatgrid.project.models import Project, Stem
+from beatgrid.project.models import Project, Stem, WarpRender
 
 
 class ProjectController(QObject):
@@ -98,4 +98,8 @@ class ProjectController(QObject):
 
     def set_stem_offset(self, stem_id: str, start_offset_sec: float) -> None:
         self._stem(stem_id).start_offset_sec = start_offset_sec
+        self.project_changed.emit()
+
+    def add_warp_render(self, warp_render: WarpRender) -> None:
+        self._project.warp_renders.append(warp_render)
         self.project_changed.emit()
