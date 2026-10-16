@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pyqtgraph as pg
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from beatgrid.audio.loader import LoadedAudio
@@ -18,6 +19,8 @@ class StemTrackView(QWidget):
     """One pyqtgraph plot row for a single stem: stem panel (name/mute/solo)
     + waveform + grid overlay + drift markers. X-axes of all rows are linked
     together by the caller so zoom/scroll stays in sync across stems."""
+
+    seek_requested = Signal(float)  # stem-local seconds, from a double-click
 
     def __init__(self, stem: Stem, audio: LoadedAudio) -> None:
         super().__init__()
@@ -42,13 +45,25 @@ class StemTrackView(QWidget):
         )
 
         self.grid_overlay = GridOverlay(self.plot_widget.getPlotItem())
-        self.drift_overlay = DriftOverlay(self.plot_widget.getPlotItem())
+        self.drift_overlay = DriftOverlay(
+            self.plot_widget.getPlotItem(), marker_y=0.9 * self.waveform_item.y_extent
+        )
 
         self._playhead = pg.InfiniteLine(
             pos=0.0, angle=90, movable=False, pen=pg.mkPen("w", width=1)
         )
         self._playhead.setZValue(10)
         self.plot_widget.addItem(self._playhead, ignoreBounds=True)
+
+        self.plot_widget.scene().sigMouseClicked.connect(self._on_scene_clicked)
+
+    def _on_scene_clicked(self, event) -> None:
+        if not event.double() or event.button() != Qt.MouseButton.LeftButton:
+            return
+        view_box = self.view_box()
+        if not view_box.sceneBoundingRect().contains(event.scenePos()):
+            return  # e.g. on the time axis below the plot
+        self.seek_requested.emit(view_box.mapSceneToView(event.scenePos()).x())
 
     @property
     def stem(self) -> Stem:

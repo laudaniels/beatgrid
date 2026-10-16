@@ -144,3 +144,16 @@ def test_renumber_then_generate_beats_stays_continuous_after_insertion():
     times = [round(b.time_sec, 3) for b in beats]
     assert times == sorted(times)
     assert all(round(b - a, 3) == 0.5 for a, b in zip(times, times[1:], strict=False))
+
+
+def test_beat_offsets_nudge_individual_beats():
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4),
+        anchors=[_anchor(1.0, 0, 120.0)],
+        sample_rate=44100,
+        beat_offsets={1: 0.01, 3: -0.02},
+    )
+    beats = grid.generate_beats(end_time_sec=3.0)
+
+    assert [b.time_sec for b in beats] == [1.0, 1.51, 2.0, 2.48]
+    assert beats[1].sample_index == round(1.51 * 44100)

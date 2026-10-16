@@ -11,6 +11,7 @@ def detect_transients(
     sample_rate: int,
     *,
     refine_window_sec: float = 0.015,
+    min_gap_sec: float = 0.05,
 ) -> list[float]:
     """Sample-precise transient (onset) times in seconds.
 
@@ -18,14 +19,29 @@ def detect_transients(
     resolution, ~11ms by default); each one is refined to the sample with
     the steepest local rise in amplitude nearby, independent of whichever
     detector produced the raw beat proposal.
+
+    No librosa backtracking: it moves each onset back to the preceding
+    energy minimum, which inside a decaying tom/cymbal or a quiet stretch
+    lies tens of ms before the actual attack (~50 ms on real drum stems).
+    A single hit can still yield a second onset a few frames into its
+    body; any transient within min_gap_sec after the previous kept one is
+    dropped, so each hit is represented by its attack only.
     """
     import librosa
 
-    coarse_times = librosa.onset.onset_detect(y=audio, sr=sample_rate, units="time", backtrack=True)
-    return [
+    coarse_times = librosa.onset.onset_detect(y=audio, sr=sample_rate, units="time")
+    refined = sorted(
         _refine_to_sample(audio, sample_rate, float(t), window_sec=refine_window_sec)
         for t in coarse_times
-    ]
+    )
+    kept: list[float] = []
+    for t in refined:
+        if not kept or t - kept[-1] >= min_gap_sec:
+            kept.append(t)
+    return kept
+
+
+_RISE_WINDOW_SEC = 0.002
 
 
 def _refine_to_sample(
@@ -39,10 +55,25 @@ def _refine_to_sample(
     half_window = max(1, int(round(window_sec * sample_rate)))
     start = max(0, center - half_window)
     end = min(len(audio), center + half_window)
-    if end - start < 2:
+    # Ratio of the mean level just after vs. just before each candidate
+    # sample: a single sample-to-sample jump is almost random on noisy
+    # attacks (snare, cymbal), and an absolute difference peaks somewhere
+    # inside a loud hit's body rather than at the jump out of the quiet
+    # before it. The ratio peaks at the onset itself.
+    w = max(1, int(round(_RISE_WINDOW_SEC * sample_rate)))
+    lo = max(0, start - w)
+    hi = min(len(audio), end + w)
+    if hi - lo < 2 * w + 1:
         return approx_time_sec
-    rise = np.diff(np.abs(audio[start:end]))
-    return (start + int(np.argmax(rise))) / sample_rate
+    csum = np.concatenate(([0.0], np.cumsum(np.abs(audio[lo:hi]), dtype=np.float64)))
+    candidates = np.arange(max(start, lo + w), min(end, hi - w))
+    if len(candidates) == 0:
+        return approx_time_sec
+    rel = candidates - lo
+    after = csum[rel + w] - csum[rel]
+    before = csum[rel] - csum[rel - w]
+    eps = 1e-4 * w  # ~-80 dBFS floor so digital silence doesn't divide by zero
+    return int(candidates[np.argmax((after + eps) / (before + eps))]) / sample_rate
 
 
 def snap_to_nearest_transient(

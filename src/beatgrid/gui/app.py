@@ -10,7 +10,11 @@ from beatgrid.gui.main_window import MainWindow
 def main() -> int:
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.show()
+    # Under WSLg with several monitors, Qt's "primary" screen isn't
+    # necessarily the main/largest one -- open maximized on the largest.
+    screen = max(app.screens(), key=lambda s: s.size().width() * s.size().height())
+    window.setGeometry(screen.availableGeometry())
+    window.showMaximized()
     return app.exec()
 
 

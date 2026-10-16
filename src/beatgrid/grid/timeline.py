@@ -21,6 +21,12 @@ def project_time_to_stem_sample(time_sec: float, stem: Stem, sample_rate: int | 
     return round(project_time_to_stem_time(time_sec, stem) * rate)
 
 
+def stem_time_to_project_time(time_sec: float, stem: Stem) -> float:
+    """Inverse of project_time_to_stem_time: a position on `stem`'s own
+    timeline translated back to project time."""
+    return time_sec + stem.start_offset_sec
+
+
 def stem_sample_to_project_time(sample_index: int, stem: Stem) -> float:
     return sample_index / stem.sample_rate + stem.start_offset_sec
 

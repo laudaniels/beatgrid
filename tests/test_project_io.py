@@ -74,3 +74,27 @@ def test_save_produces_readable_json(tmp_path):
     data = json.loads(path.read_text())
     assert data["name"] == "Test Track"
     assert data["grid"]["anchors"][0]["bpm"] == 128.0
+
+
+def test_default_reference_stem_prefers_drums():
+    from beatgrid.project.models import default_reference_stem_id
+
+    stems = [
+        Stem(id="Bass - song", path=Path("b.wav")),
+        Stem(id="DRUMS - song", path=Path("d.wav")),
+    ]
+    assert default_reference_stem_id(stems) == "DRUMS - song"
+    assert default_reference_stem_id(stems[:1]) == "Bass - song"
+
+
+def test_beat_offsets_roundtrip_and_default_for_older_projects(tmp_path):
+    project = _sample_project()
+    project.grid.beat_offsets = {3: 0.012, 7: -0.02}
+    path = tmp_path / "test.beatgrid"
+    save_project(project, path)
+    assert load_project(path).grid.beat_offsets == {3: 0.012, 7: -0.02}
+
+    data = json.loads(path.read_text())
+    del data["grid"]["beat_offsets"]
+    path.write_text(json.dumps(data))
+    assert load_project(path).grid.beat_offsets == {}

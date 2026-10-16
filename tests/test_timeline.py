@@ -4,7 +4,9 @@ from beatgrid.grid.model import Beat
 from beatgrid.grid.timeline import (
     beats_to_stem_samples,
     project_time_to_stem_sample,
+    project_time_to_stem_time,
     stem_sample_to_project_time,
+    stem_time_to_project_time,
 )
 from beatgrid.project.models import Stem
 
@@ -46,3 +48,9 @@ def test_beats_to_stem_samples():
         Beat(index=1, time_sec=0.6, sample_index=26460, bar=1, beat_in_bar=2, is_downbeat=False),
     ]
     assert beats_to_stem_samples(beats, stem) == [0, round(0.5 * 44100)]
+
+
+def test_stem_time_to_project_time_inverts_project_time_to_stem_time():
+    stem = _stem(start_offset_sec=0.75)
+    assert stem_time_to_project_time(1.0, stem) == 1.75
+    assert project_time_to_stem_time(stem_time_to_project_time(1.0, stem), stem) == 1.0

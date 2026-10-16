@@ -58,6 +58,8 @@ def _grid_from_dict(data: dict) -> BeatGrid:
         time_signature=TimeSignature(**data["time_signature"]),
         anchors=[Anchor(**a) for a in data["anchors"]],
         sample_rate=data["sample_rate"],
+        # JSON object keys are strings; older projects have no offsets
+        beat_offsets={int(k): v for k, v in data.get("beat_offsets", {}).items()},
     )
 
 

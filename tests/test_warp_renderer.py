@@ -195,14 +195,17 @@ def test_render_warp_writes_non_destructive_files_and_returns_warp_render(tmp_pa
     }
 
     output_dir = tmp_path / "warped"
+    progress = []
     result = render_warp(
         project,
         target_bpm=130.0,
         engine=PedalboardStretcher(),
         output_dir=output_dir,
         audio_by_stem=audio_by_stem,
+        on_progress=lambda done, total, stem_id: progress.append((done, total, stem_id)),
     )
 
+    assert progress == [(0, 2, "kick"), (1, 2, "bass"), (2, 2, "")]
     assert isinstance(result, WarpRender)
     assert result.target_bpm == 130.0
     assert result.engine == "pedalboard"

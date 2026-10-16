@@ -54,3 +54,32 @@ def test_compute_drift_with_empty_grid_never_flags():
 
 def test_compute_drift_with_no_transients():
     assert compute_drift([], [0.0, 0.5], threshold_sec=0.02) == []
+
+
+def _drum_like_hits(hit_times, sample_rate=44100, duration_sec=4.0):
+    """Decaying noise bursts with a second, slightly weaker burst 25 ms into
+    each hit's body -- the shape that used to yield an early (backtracked)
+    onset plus a duplicate late one per hit."""
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    audio = 0.002 * rng.standard_normal(int(duration_sec * sample_rate))
+    body = np.arange(int(0.3 * sample_rate)) / sample_rate
+    for hit in hit_times:
+        for delay, amp in ((0.0, 0.8), (0.025, 0.6)):
+            start = int((hit + delay) * sample_rate)
+            burst = amp * np.exp(-body / 0.06) * rng.standard_normal(len(body))
+            audio[start : start + len(body)] += burst[: len(audio) - start]
+    return audio.astype(np.float32)
+
+
+def test_detect_transients_gives_one_transient_at_each_hits_attack():
+    pytest.importorskip("librosa")
+    hit_times = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+    audio = _drum_like_hits(hit_times)
+
+    transients = detect_transients(audio, 44100)
+
+    assert len(transients) == len(hit_times)
+    for hit, transient in zip(hit_times, transients, strict=True):
+        assert abs(transient - hit) < 0.005

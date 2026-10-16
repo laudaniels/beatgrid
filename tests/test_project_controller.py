@@ -223,3 +223,31 @@ def test_add_warp_render_appends_and_emits():
 
     assert controller.project.warp_renders == [warp_render]
     assert received == [True]
+
+
+def test_set_beat_offsets_is_undoable():
+    controller = _controller()
+    controller.set_beat_offsets({1: 0.01})
+    assert controller.project.grid.beat_offsets == {1: 0.01}
+
+    controller.undo()
+    assert controller.project.grid.beat_offsets == {}
+
+
+def test_anchor_edits_clear_beat_offsets():
+    controller = _controller()
+    controller.set_beat_offsets({1: 0.01})
+    controller.move_anchor("a1", 0.1)
+    assert controller.project.grid.beat_offsets == {}
+
+    controller.set_beat_offsets({1: 0.01})
+    controller.set_anchor_bpm("a1", 100.0)
+    assert controller.project.grid.beat_offsets == {}
+
+    controller.set_beat_offsets({1: 0.01})
+    anchor_id = controller.add_anchor(2.0, 100.0)
+    assert controller.project.grid.beat_offsets == {}
+
+    controller.set_beat_offsets({1: 0.01})
+    controller.remove_anchor(anchor_id)
+    assert controller.project.grid.beat_offsets == {}

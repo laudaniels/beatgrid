@@ -41,3 +41,23 @@ def test_zoomed_past_finest_level_draws_connected_raw_samples(qtbot):
     xs, ys = item._curve.getData()
     start = int(xs[0] * SAMPLE_RATE + 0.5)
     assert np.array_equal(ys, audio[start : start + len(ys)])
+
+
+def test_drift_markers_fall_inside_visible_y_range(qtbot):
+    from pathlib import Path
+
+    from beatgrid.audio.loader import LoadedAudio
+    from beatgrid.detection.transient import DriftPoint
+    from beatgrid.gui.widgets.stem_track_view import StemTrackView
+    from beatgrid.project.models import Stem
+
+    audio = (0.3 * np.random.default_rng(0).uniform(-1, 1, 8 * SAMPLE_RATE)).astype(np.float32)
+    view = StemTrackView(
+        Stem(id="s", path=Path("s.wav"), sample_rate=SAMPLE_RATE), LoadedAudio(audio, SAMPLE_RATE)
+    )
+    qtbot.addWidget(view)
+    view.set_drift_points([DriftPoint(time_sec=1.0, deviation_sec=0.0, is_drifting=False)])
+
+    _xs, ys = view.drift_overlay._scatter.getData()
+    y_min, y_max = view.view_box().viewRange()[1]
+    assert y_min < ys[0] < y_max

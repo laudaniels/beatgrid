@@ -44,3 +44,15 @@ class Project:
             if stem.id == self.reference_stem_id:
                 return stem
         raise ValueError(f"reference_stem_id {self.reference_stem_id!r} not found in stems")
+
+
+def default_reference_stem_id(stems: list[Stem]) -> str:
+    """The stem a freshly loaded project uses as its reference: the first one
+    whose id mentions drums (the steadiest beat source for detection),
+    falling back to the first stem."""
+    if not stems:
+        raise ValueError("need at least one stem")
+    for stem in stems:
+        if "drum" in stem.id.lower():
+            return stem.id
+    return stems[0].id

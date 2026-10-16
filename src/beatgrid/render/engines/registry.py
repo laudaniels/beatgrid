@@ -43,3 +43,7 @@ def get_engine(name: str | None = None) -> TimeStretcher | TimemapStretcher:
 
 def available_engines() -> list[str]:
     return sorted(_REGISTRY)
+
+
+def default_engine_name() -> str | None:
+    return DEFAULT_ENGINE_NAME

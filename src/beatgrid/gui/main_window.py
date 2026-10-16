@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import datetime
 from pathlib import Path
 
@@ -26,7 +27,8 @@ from beatgrid.detection.registry import available_detectors, get_detector
 from beatgrid.detection.transient import compute_drift, detect_transients
 from beatgrid.export.registry import get_exporter
 from beatgrid.grid.model import Anchor, Beat, BeatGrid, TimeSignature
-from beatgrid.grid.timeline import project_time_to_stem_time
+from beatgrid.grid.snap import snap_offsets
+from beatgrid.grid.timeline import project_time_to_stem_time, stem_time_to_project_time
 from beatgrid.gui.controllers.project_controller import ProjectController
 from beatgrid.gui.playback.audio_player import AudioPlayer, PlaybackStem
 from beatgrid.gui.playback.metronome import build_metronome
@@ -34,13 +36,14 @@ from beatgrid.gui.widgets.anchor_item import AnchorItem
 from beatgrid.gui.widgets.stem_track_view import StemTrackView
 from beatgrid.gui.widgets.transport_bar import TransportBar
 from beatgrid.gui.widgets.warp_dialog import WarpDialog
-from beatgrid.project.models import Project, Stem
+from beatgrid.project.models import Project, Stem, default_reference_stem_id
 from beatgrid.project.project_io import load_project, save_project
 from beatgrid.render.engines.registry import get_engine
 from beatgrid.render.warp_renderer import render_warp
 
 DEFAULT_BPM = 120.0
 DRIFT_THRESHOLD_SEC = 0.02
+SNAP_TOLERANCE_SEC = 0.06
 PLAYHEAD_TIMER_INTERVAL_MS = 33  # ~30Hz
 
 
@@ -131,6 +134,14 @@ class MainWindow(QMainWindow):
         self.drift_action.toggled.connect(self._on_toggle_drift)
         toolbar.addAction(self.drift_action)
 
+        snap_beats_action = QAction("Snap beats", self)
+        snap_beats_action.setToolTip(
+            "Snap every beat to the nearest transient on the reference stem "
+            f"(within ±{SNAP_TOLERANCE_SEC * 1000:.0f} ms)"
+        )
+        snap_beats_action.triggered.connect(self._on_snap_beats)
+        toolbar.addAction(snap_beats_action)
+
         add_anchor_action = QAction("Add anchor", self)
         add_anchor_action.setToolTip(
             "Add a new anchor at the center of the reference stem's current view"
@@ -162,7 +173,7 @@ class MainWindow(QMainWindow):
         self._tracks_layout = QVBoxLayout(tracks_container)
         self._tracks_layout.setContentsMargins(4, 4, 4, 4)
         self._tracks_layout.setSpacing(2)
-        self._tracks_layout.addStretch(1)
+        self._tracks_layout.addStretch(0)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -194,9 +205,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Could not load stems", str(exc))
 
     def load_stems(self, paths: list[Path]) -> None:
-        """Load the given audio files as stems of a new project: one default
-        anchor at t=0, the first stem as reference. GUI entry point for the
-        MVP flow; also used directly by tests without a file dialog."""
+        """Load the given audio files as stems of a new project: a drums stem
+        (if any, else the first) as reference, and one anchor placed by
+        running the selected detector on it. GUI entry point for the MVP
+        flow; also used directly by tests without a file dialog."""
         audio_by_id: dict[str, LoadedAudio] = {}
         stems: list[Stem] = []
         for path in paths:
@@ -213,22 +225,50 @@ class MainWindow(QMainWindow):
             )
             audio_by_id[stem_id] = loaded
 
+        reference_stem_id = default_reference_stem_id(stems)
+        reference_audio = audio_by_id[reference_stem_id]
+        anchor_time, bpm = self._detect_initial_anchor(reference_audio)
         grid = BeatGrid(
             time_signature=TimeSignature(4, 4),
             anchors=[
-                Anchor(id="anchor-0", time_sec=0.0, sample_index=0, beat_index=0, bpm=DEFAULT_BPM)
+                Anchor(
+                    id="anchor-0",
+                    time_sec=anchor_time,
+                    sample_index=round(anchor_time * reference_audio.sample_rate),
+                    beat_index=0,
+                    bpm=bpm,
+                )
             ],
             sample_rate=stems[0].sample_rate,
         )
         project = Project(
             name="Untitled",
             stems=stems,
-            reference_stem_id=stems[0].id,
+            reference_stem_id=reference_stem_id,
             grid=grid,
             created_at=datetime.now(),
         )
         self._current_project_path = None
         self._activate_project(project, audio_by_id)
+
+    def _detect_initial_anchor(self, audio: LoadedAudio) -> tuple[float, float]:
+        """(anchor_time, bpm) for a freshly loaded project, the same way the
+        Detect action computes it. Falls back to t=0 at DEFAULT_BPM (with a
+        warning) if detection fails, so loading itself never fails on it."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            detector = get_detector(self.detector_combo.currentText())
+            result = detector.detect(audio.audio, audio.sample_rate)
+            return propose_anchor(result.beat_times, audio.audio, audio.sample_rate)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+            QMessageBox.warning(
+                self,
+                "Detection failed",
+                f"{exc}\n\nGrid set to {DEFAULT_BPM:g} BPM; use Detect to retry.",
+            )
+            return 0.0, DEFAULT_BPM
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def open_project(self, path: Path) -> None:
         """Load a previously saved .beatgrid project file: re-reads each
@@ -280,7 +320,9 @@ class MainWindow(QMainWindow):
             view = StemTrackView(stem, self._audio[stem.id])
             view.stem_panel.muted_changed.connect(self._on_stem_muted)
             view.stem_panel.solo_changed.connect(self._on_stem_solo)
-            self._tracks_layout.insertWidget(self._tracks_layout.count() - 1, view)
+            view.seek_requested.connect(self._make_seek_handler(stem.id))
+            # stretch 1: rows share any extra height (the trailing stretch has 0)
+            self._tracks_layout.insertWidget(self._tracks_layout.count() - 1, view, 1)
             self._track_views[stem.id] = view
             self.reference_combo.addItem(stem.id)
 
@@ -486,6 +528,34 @@ class MainWindow(QMainWindow):
                 view.clear_drift_points()
         self._redraw()
 
+    def _on_snap_beats(self) -> None:
+        """Nudge each beat onto the nearest transient of the reference stem,
+        within SNAP_TOLERANCE_SEC (e.g. a live drummer slightly ahead of or
+        behind the constant-tempo grid). Anchors themselves stay put. Re-snaps
+        from the unsnapped grid, so repeated presses don't accumulate."""
+        if self._controller is None:
+            return
+        self._ensure_transients_cached()
+        project = self._controller.project
+        reference_stem = project.reference_stem()
+        unsnapped_grid = copy.deepcopy(project.grid)
+        unsnapped_grid.beat_offsets = {}
+        beats = unsnapped_grid.generate_beats(end_time_sec=reference_stem.duration_sec)
+        transients = [
+            stem_time_to_project_time(t, reference_stem)
+            for t in self._transients_by_stem.get(reference_stem.id, [])
+        ]
+        offsets = snap_offsets(
+            beats,
+            transients,
+            max_distance_sec=SNAP_TOLERANCE_SEC,
+            skip_indices=frozenset(a.beat_index for a in project.grid.anchors),
+        )
+        self._controller.set_beat_offsets(offsets)
+        self.statusBar().showMessage(
+            f"Snapped {len(offsets)} of {len(beats)} beats to transients", 5000
+        )
+
     def _ensure_transients_cached(self) -> None:
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -570,6 +640,27 @@ class MainWindow(QMainWindow):
         else:
             self._audio_player.stop()
             self._playhead_timer.stop()
+
+    def _make_seek_handler(self, stem_id: str):
+        # look the stem up at click time: undo/redo and offset changes
+        # replace the project's Stem objects after the view was built
+        def handler(stem_time_sec: float) -> None:
+            if self._controller is None:
+                return
+            stem = next(s for s in self._controller.project.stems if s.id == stem_id)
+            self.seek_and_play(stem_time_to_project_time(stem_time_sec, stem))
+
+        return handler
+
+    def seek_and_play(self, project_time_sec: float) -> None:
+        """Move the playhead to `project_time_sec` (double-click on a track)
+        and play from there; if already playing, playback just jumps."""
+        if self._audio_player is None:
+            return
+        self._audio_player.seek(max(0.0, project_time_sec))
+        self._update_playhead_positions()
+        if not self._audio_player.is_playing:
+            self.transport_bar.play_button.setChecked(True)
 
     def _on_metronome_toggled(self, enabled: bool) -> None:
         if self._controller is None or self._audio_player is None:
@@ -667,14 +758,22 @@ class MainWindow(QMainWindow):
         reference_stem = project.reference_stem()
         output_dir = reference_stem.path.parent / "warped"
 
+        def on_progress(done: int, total: int, stem_id: str) -> None:
+            dialog.show_progress(done, total, stem_id)
+            QApplication.processEvents()  # repaint between (blocking) per-stem renders
+
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        dialog.set_busy(True)
         try:
             engine = get_engine(engine_name)
-            warp_render = render_warp(project, target_bpm, engine, output_dir, self._audio)
+            warp_render = render_warp(
+                project, target_bpm, engine, output_dir, self._audio, on_progress=on_progress
+            )
         except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
             dialog.show_error(str(exc))
             return
         finally:
+            dialog.set_busy(False)
             QApplication.restoreOverrideCursor()
 
         self._controller.add_warp_render(warp_render)

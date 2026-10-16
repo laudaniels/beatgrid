@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -127,6 +128,7 @@ def render_warp(
     engine: TimeStretcher | TimemapStretcher,
     output_dir: Path,
     audio_by_stem: dict[str, LoadedAudio],
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> WarpRender:
     """Warp every stem in `project` to `target_bpm` and write each to a new,
     non-destructive file under `output_dir` — the originals are never
@@ -136,6 +138,10 @@ def render_warp(
     Dispatches to the native-timemap path (warp_stem_audio_timemap) when
     `engine` supports it (the M9 production engine), otherwise falls back to
     the segment+crossfade path (warp_stem_audio, M8's prototype engine).
+
+    `on_progress(done, total, stem_id)` is called before each stem is
+    warped (stem_id = the one about to start) and once more at the end
+    (done == total, stem_id == "").
     """
     reference_stem = project.reference_stem()
     end_time_sec = reference_stem.duration_sec
@@ -154,7 +160,10 @@ def render_warp(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_paths: dict[str, Path] = {}
-    for stem in project.stems:
+    total = len(project.stems)
+    for done, stem in enumerate(project.stems):
+        if on_progress is not None:
+            on_progress(done, total, stem.id)
         loaded = audio_by_stem[stem.id]
         if uses_timemap:
             warped = warp_stem_audio_timemap(
@@ -168,6 +177,8 @@ def render_warp(
         sf.write(out_path, warped, loaded.sample_rate)
         output_paths[stem.id] = out_path
 
+    if on_progress is not None:
+        on_progress(total, total, "")
     return WarpRender(
         target_bpm=target_bpm,
         engine=engine.name,

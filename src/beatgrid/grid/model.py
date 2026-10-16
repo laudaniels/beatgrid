@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,11 @@ class BeatGrid:
     time_signature: TimeSignature
     anchors: list[Anchor]
     sample_rate: int
+    # Per-beat nudge (beat index -> seconds, signed) on top of the anchors'
+    # constant-tempo positions, e.g. from snapping beats to transients. Kept
+    # separate from the anchors so a live-played grid doesn't need one
+    # anchor per beat; any anchor edit invalidates (clears) it.
+    beat_offsets: dict[int, float] = field(default_factory=dict)
 
     def renumber_anchors(self) -> None:
         """Recompute every anchor's beat_index from its neighbors' timing and
@@ -94,6 +99,7 @@ class BeatGrid:
                     break
 
                 beat_index = anchor.beat_index + n
+                time_sec += self.beat_offsets.get(beat_index, 0.0)
                 beats.append(
                     Beat(
                         index=beat_index,

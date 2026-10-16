@@ -85,6 +85,7 @@ class ProjectController(QObject):
         anchor.time_sec = max(0.0, new_time_sec)
         anchor.sample_index = round(anchor.time_sec * reference.sample_rate)
         self._project.grid.renumber_anchors()
+        self._project.grid.beat_offsets.clear()  # snapped to the old grid
         self.project_changed.emit()
 
     def nudge_anchor(self, anchor_id: str, delta_sec: float) -> None:
@@ -96,6 +97,7 @@ class ProjectController(QObject):
         self._push_undo()
         self._anchor(anchor_id).bpm = bpm
         self._project.grid.renumber_anchors()
+        self._project.grid.beat_offsets.clear()  # snapped to the old grid
         self.project_changed.emit()
 
     def add_anchor(self, time_sec: float, bpm: float) -> str:
@@ -114,6 +116,7 @@ class ProjectController(QObject):
         )
         self._project.grid.anchors.append(anchor)
         self._project.grid.renumber_anchors()
+        self._project.grid.beat_offsets.clear()  # snapped to the old grid
         self.project_changed.emit()
         return anchor.id
 
@@ -124,6 +127,12 @@ class ProjectController(QObject):
         self._push_undo()
         self._project.grid.anchors = [a for a in self._project.grid.anchors if a.id != anchor_id]
         self._project.grid.renumber_anchors()
+        self._project.grid.beat_offsets.clear()  # snapped to the old grid
+        self.project_changed.emit()
+
+    def set_beat_offsets(self, offsets: dict[int, float]) -> None:
+        self._push_undo()
+        self._project.grid.beat_offsets = dict(offsets)
         self.project_changed.emit()
 
     def set_reference_stem(self, stem_id: str) -> None:

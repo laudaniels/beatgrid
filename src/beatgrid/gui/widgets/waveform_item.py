@@ -38,9 +38,15 @@ class WaveformItem:
         view_box.sigXRangeChanged.connect(self._on_range_changed)
         self._redraw(view_box)
         plot_item.autoRange()
-        y_extent = self._cache.peak if self._cache.peak > 0 else 1.0
+        y_extent = self.y_extent
         view_box.setYRange(-y_extent, y_extent, padding=0.05)
         view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
+
+    @property
+    def y_extent(self) -> float:
+        """Half-height of the fixed y-range: the whole file's peak (1.0 for
+        silence), so overlays can place themselves inside the visible area."""
+        return self._cache.peak if self._cache.peak > 0 else 1.0
 
     def _on_range_changed(self, view_box: pg.ViewBox, _x_range: tuple[float, float]) -> None:
         self._redraw(view_box)

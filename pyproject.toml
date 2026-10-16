@@ -77,4 +77,5 @@ testpaths = ["tests"]
 markers = [
     "gui: tests that require a Qt platform plugin (offscreen in CI)",
     "requires_rubberband: tests that require the rubberband-cli binary to be installed",
+    "auto_detect: GUI tests that exercise the real auto-detect on load_stems()",
 ]

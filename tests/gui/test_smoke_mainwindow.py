@@ -520,15 +520,36 @@ def test_warp_requested_success_adds_warp_render_and_shows_result(qtbot, tmp_pat
         output_paths={"kick": tmp_path / "kick_warped.wav"},
     )
     monkeypatch.setattr("beatgrid.gui.main_window.get_engine", lambda name=None: object())
-    monkeypatch.setattr("beatgrid.gui.main_window.render_warp", lambda *a, **k: fake_warp_render)
+    progress_seen = []
+
+    def fake_render_warp(*a, on_progress=None, **k):
+        on_progress(0, 1, "kick")
+        progress_seen.append((dialog.progress_bar.value(), dialog.render_button.isEnabled()))
+        on_progress(1, 1, "")
+        return fake_warp_render
+
+    monkeypatch.setattr("beatgrid.gui.main_window.render_warp", fake_render_warp)
 
     dialog = WarpDialog(120.0)
     qtbot.addWidget(dialog)
 
     window._on_warp_requested(dialog, 130.0, "pedalboard")
 
+    assert progress_seen == [(0, False)]  # inputs locked while rendering
+    assert dialog.render_button.isEnabled()
     assert window.controller.project.warp_renders == [fake_warp_render]
     assert "Done" in dialog.status_label.text()
+    assert "kick_warped.wav" in dialog.results_view.toPlainText()
+
+
+def test_warp_dialog_preselects_default_engine(qtbot, monkeypatch):
+    from beatgrid.gui.widgets import warp_dialog
+
+    monkeypatch.setattr(warp_dialog, "available_engines", lambda: ["a-engine", "z-engine"])
+    monkeypatch.setattr(warp_dialog, "default_engine_name", lambda: "z-engine")
+    dialog = warp_dialog.WarpDialog(120.0)
+    qtbot.addWidget(dialog)
+    assert dialog.engine_name == "z-engine"
 
 
 def test_warp_requested_failure_shows_error_in_dialog(qtbot, tmp_path, monkeypatch):
@@ -629,3 +650,102 @@ def test_play_pause_shortcut_toggles_play_button(qtbot, tmp_path, monkeypatch):
 
     window._on_play_pause_shortcut()
     assert calls == ["play", "stop"]
+
+
+@pytest.mark.auto_detect
+def test_load_stems_places_anchor_from_detection_on_drums_stem(qtbot, tmp_path, monkeypatch):
+    from beatgrid.detection.base import DetectionResult
+
+    detected_on = []
+
+    class StubDetector:
+        name = "stub"
+
+        def detect(self, audio, sample_rate):
+            detected_on.append(audio)
+            return DetectionResult(bpm=999.0, beat_times=[0.0, 1.0])
+
+    monkeypatch.setattr("beatgrid.gui.main_window.get_detector", lambda name=None: StubDetector())
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.propose_anchor",
+        lambda beat_times, audio, sample_rate: (0.25, 101.5),
+    )
+    window = MainWindow()
+    qtbot.addWidget(window)
+    paths = []
+    for name in ("Bass", "Drums"):
+        path = tmp_path / f"{name}.wav"
+        _write_wav(path)
+        paths.append(path)
+    window.load_stems(paths)
+
+    project = window.controller.project
+    assert project.reference_stem_id == "Drums"
+    assert len(detected_on) == 1
+    anchor = project.grid.anchors[0]
+    assert anchor.time_sec == pytest.approx(0.25)
+    assert anchor.sample_index == 2000  # 0.25 s at 8 kHz
+    assert anchor.bpm == pytest.approx(101.5)
+    assert not window.controller.can_undo
+
+
+@pytest.mark.auto_detect
+def test_load_stems_falls_back_to_default_bpm_when_detection_fails(qtbot, tmp_path, monkeypatch):
+    def failing_detector(name=None):
+        raise RuntimeError("boom")
+
+    warnings = []
+    monkeypatch.setattr("beatgrid.gui.main_window.get_detector", failing_detector)
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QMessageBox.warning", lambda *a, **k: warnings.append(a)
+    )
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    anchor = window.controller.project.grid.anchors[0]
+    assert anchor.time_sec == 0.0
+    assert anchor.bpm == pytest.approx(120.0)
+    assert len(warnings) == 1
+
+
+def test_track_seek_request_moves_playhead_and_starts_playback(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+    window.controller.set_stem_offset("bass", 0.5)
+
+    calls = []
+    monkeypatch.setattr(window._audio_player, "play", lambda: calls.append("play"))
+
+    # a double-click at 1.0s on bass's own timeline is project time 1.5s
+    window._track_views["bass"].seek_requested.emit(1.0)
+
+    assert window._audio_player.position_sec == pytest.approx(1.5)
+    assert calls == ["play"]
+    assert window.transport_bar.play_button.isChecked()
+    assert window._track_views["kick"].playhead_time == pytest.approx(1.5)
+    assert window._track_views["bass"].playhead_time == pytest.approx(1.0)
+
+
+def test_snap_beats_nudges_beats_to_nearby_transients(qtbot, tmp_path, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)  # anchor at 0 s, 120 BPM: beats every 0.5 s
+
+    # beat 1 (0.5 s) has a transient 15 ms late, beat 2 (1.0 s) one 80 ms
+    # early (outside tolerance); beat 0 is the anchor itself
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.detect_transients", lambda audio, sr: [0.005, 0.515, 0.92]
+    )
+    window._on_snap_beats()
+
+    offsets = window.controller.project.grid.beat_offsets
+    assert offsets.keys() == {1}
+    assert offsets[1] == pytest.approx(0.015)
+    window._on_snap_beats()  # re-snapping doesn't accumulate
+    assert window.controller.project.grid.beat_offsets[1] == pytest.approx(0.015)
+
+    window.controller.undo()
+    window.controller.undo()
+    assert window.controller.project.grid.beat_offsets == {}
