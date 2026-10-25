@@ -318,6 +318,17 @@ def test_render_warp_rubberband_anchors_land_sample_accurately_and_stems_match_l
     bass_frames = sf.info(result.output_paths["bass"]).frames
     assert kick_frames == bass_frames
 
+    # (c) every downbeat gets a "Bar N" cue marker at its warped position
+    from beatgrid.render.wav_markers import read_cue_markers
+
+    expected_markers = [
+        (target, f"Bar {beat.bar}")
+        for beat, target in zip(beats, expected_targets, strict=True)
+        if beat.is_downbeat
+    ]
+    assert read_cue_markers(result.output_paths["kick"]) == expected_markers
+    assert read_cue_markers(result.output_paths["bass"]) == expected_markers
+
 
 def test_render_warp_raises_without_anchors(tmp_path):
     grid = BeatGrid(time_signature=TimeSignature(), anchors=[], sample_rate=44100)

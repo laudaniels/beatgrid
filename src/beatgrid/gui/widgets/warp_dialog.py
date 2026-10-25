@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from beatgrid.detection.refine import MAX_BPM
 from beatgrid.render.engines.registry import available_engines, default_engine_name
 
 
@@ -35,7 +36,7 @@ class WarpDialog(QDialog):
         self.setMinimumSize(720, 420)
 
         self.bpm_spinbox = QDoubleSpinBox()
-        self.bpm_spinbox.setRange(20.0, 300.0)
+        self.bpm_spinbox.setRange(20.0, MAX_BPM)
         self.bpm_spinbox.setDecimals(2)
         self.bpm_spinbox.setValue(default_bpm)
 

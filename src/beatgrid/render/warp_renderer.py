@@ -13,7 +13,8 @@ from beatgrid.grid.model import Beat, BeatGrid
 from beatgrid.grid.timeline import project_time_to_stem_sample
 from beatgrid.project.models import Project, Stem, WarpRender
 from beatgrid.render.engines.base import TimemapStretcher, TimeStretcher
-from beatgrid.render.timemap import build_timemap
+from beatgrid.render.timemap import build_timemap, place_beats
+from beatgrid.render.wav_markers import add_cue_markers
 
 CROSSFADE_SEC = 0.008
 
@@ -139,6 +140,11 @@ def render_warp(
     `engine` supports it (the M9 production engine), otherwise falls back to
     the segment+crossfade path (warp_stem_audio, M8's prototype engine).
 
+    With the timemap path, each output file also gets a cue marker
+    ("Bar N") on every downbeat, exactly where the warp put it. The segment
+    path doesn't get markers: its crossfaded joins shift later audio by a
+    few ms per anchor, so marker positions wouldn't be exact.
+
     `on_progress(done, total, stem_id)` is called before each stem is
     warped (stem_id = the one about to start) and once more at the end
     (done == total, stem_id == "").
@@ -175,6 +181,11 @@ def render_warp(
             )
         out_path = output_dir / f"{stem.id}_warped.wav"
         sf.write(out_path, warped, loaded.sample_rate)
+        if uses_timemap:
+            add_cue_markers(
+                out_path,
+                bar_markers(beats, stem, loaded.sample_rate, target_bpm, len(loaded.audio)),
+            )
         output_paths[stem.id] = out_path
 
     if on_progress is not None:
@@ -185,6 +196,20 @@ def render_warp(
         rendered_at=datetime.now(),
         output_paths=output_paths,
     )
+
+
+def bar_markers(
+    beats: list[Beat], stem: Stem, sample_rate: int, target_bpm: float, total_samples: int
+) -> list[tuple[int, str]]:
+    """(sample, "Bar N") for every downbeat, at its position in `stem`'s
+    timemap-warped output."""
+    return [
+        (target, f"Bar {beat.bar}")
+        for beat, _source, target in place_beats(
+            beats, stem, sample_rate, target_bpm, total_samples
+        )
+        if beat.is_downbeat
+    ]
 
 
 def _fit_to_length(audio: np.ndarray, target_length: int) -> np.ndarray:

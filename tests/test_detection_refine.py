@@ -91,3 +91,32 @@ def test_requires_at_least_two_beats():
 def test_rejects_non_increasing_times():
     with pytest.raises(ValueError):
         fit_anchor_and_bpm([1.0, 0.5, 0.0], [0, 1, 2])
+
+
+def test_propose_anchor_folds_double_time_onto_the_louder_beats():
+    pytest.importorskip("librosa")
+    sample_rate = 22050
+    beat = make_click_track(
+        bpm=100.0, duration_sec=12.0, sample_rate=sample_rate, start_offset_sec=0.6
+    )
+    offbeat = make_click_track(
+        bpm=100.0, duration_sec=12.0, sample_rate=sample_rate, start_offset_sec=0.3, amplitude=0.25
+    )
+    audio = beat.audio + offbeat.audio
+    # a detector locked onto double time, starting on an off-beat
+    detected = [0.3 + k * 0.3 for k in range(38)]
+
+    anchor_time, bpm = propose_anchor(detected, audio, sample_rate)
+
+    assert bpm == pytest.approx(100.0, abs=0.5)
+    assert anchor_time == pytest.approx(0.6, abs=0.01)
+
+
+def test_propose_anchor_leaves_tempo_below_max_alone():
+    pytest.importorskip("librosa")
+    sample_rate = 22050
+    track = make_click_track(bpm=170.0, duration_sec=8.0, sample_rate=sample_rate)
+
+    _anchor, bpm = propose_anchor(track.beat_times, track.audio, sample_rate)
+
+    assert bpm == pytest.approx(170.0, abs=0.5)

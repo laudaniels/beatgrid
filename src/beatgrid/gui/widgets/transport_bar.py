@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from beatgrid.detection.refine import MAX_BPM
+
 NUDGE_MS_STEPS = (-10.0, -1.0, 1.0, 10.0)
 NUDGE_SAMPLE_STEPS = (-1, 1)
 
@@ -42,7 +44,7 @@ class TransportBar(QWidget):
 
         layout.addWidget(QLabel("BPM:"))
         self.bpm_spinbox = QDoubleSpinBox()
-        self.bpm_spinbox.setRange(20.0, 300.0)
+        self.bpm_spinbox.setRange(20.0, MAX_BPM)
         self.bpm_spinbox.setDecimals(2)
         self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
         layout.addWidget(self.bpm_spinbox)
