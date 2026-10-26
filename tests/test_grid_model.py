@@ -168,3 +168,32 @@ def test_average_bpm_spans_anchors_with_different_tempos():
     beats = grid.generate_beats(end_time_sec=8.5)  # 8 beats in 4 s, then 5 in 4 s
 
     assert average_bpm(beats) == 60.0 * 12 / 8.0
+
+
+def test_downbeat_sec_moves_bar_one_and_makes_earlier_beats_a_pickup():
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4),
+        anchors=[_anchor(1.0, 0, 120.0)],
+        sample_rate=44100,
+        downbeat_sec=1.52,  # nearest beat: index 1 at 1.5 s
+    )
+    beats = grid.generate_beats(end_time_sec=4.0)
+
+    assert [(b.bar, b.beat_in_bar) for b in beats[:6]] == [
+        (0, 4),  # pickup
+        (1, 1),
+        (1, 2),
+        (1, 3),
+        (1, 4),
+        (2, 1),
+    ]
+    assert [b.is_downbeat for b in beats[:6]] == [False, True, False, False, False, True]
+    assert grid.downbeat_index(beats) == 1
+
+
+def test_without_downbeat_sec_the_first_anchor_is_bar_one():
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(1.0, 0, 120.0)], sample_rate=44100
+    )
+    beats = grid.generate_beats(end_time_sec=4.0)
+    assert (beats[0].bar, beats[0].beat_in_bar, beats[0].is_downbeat) == (1, 1, True)

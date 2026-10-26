@@ -733,19 +733,103 @@ def test_snap_beats_nudges_beats_to_nearby_transients(qtbot, tmp_path, monkeypat
     qtbot.addWidget(window)
     _load_two_stems(window, tmp_path)  # anchor at 0 s, 120 BPM: beats every 0.5 s
 
-    # beat 1 (0.5 s) has a transient 15 ms late, beat 2 (1.0 s) one 80 ms
-    # early (outside tolerance); beat 0 is the anchor itself
+    # beat 1 (0.5 s) has a transient 15 ms late; beats 2 and 3 have none
+    # nearby (0.92 s is far too early), so they move along with the drift;
+    # beat 0 is the anchor itself
     monkeypatch.setattr(
         "beatgrid.gui.main_window.detect_transients", lambda audio, sr: [0.005, 0.515, 0.92]
     )
     window._on_snap_beats()
 
     offsets = window.controller.project.grid.beat_offsets
-    assert offsets.keys() == {1}
+    assert offsets.keys() == {1, 2, 3}
     assert offsets[1] == pytest.approx(0.015)
+    assert offsets[2] == offsets[3] == pytest.approx(0.0075)
+    assert window.statusBar().currentMessage() == "Snapped 1 of 4 beats to transients"
     window._on_snap_beats()  # re-snapping doesn't accumulate
     assert window.controller.project.grid.beat_offsets[1] == pytest.approx(0.015)
 
     window.controller.undo()
     window.controller.undo()
     assert window.controller.project.grid.beat_offsets == {}
+
+
+def test_downbeat_marker_sits_on_bar_one_and_dragging_it_moves_the_bars(qtbot, tmp_path):
+    from beatgrid.gui.widgets.downbeat_item import DownbeatItem
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)  # anchor at 0 s, 120 BPM; "kick" is the reference
+
+    def markers():
+        return [i for i in window.track_views["kick"]._anchor_items if isinstance(i, DownbeatItem)]
+
+    assert len(markers()) == 1
+    assert markers()[0].value() == pytest.approx(0.0)
+    bass_markers = [
+        i for i in window.track_views["bass"]._anchor_items if isinstance(i, DownbeatItem)
+    ]
+    assert bass_markers == []  # reference row only
+
+    markers()[0].moved.emit(0.47)  # dropped near the beat at 0.5 s
+
+    assert window.controller.project.grid.downbeat_sec == pytest.approx(0.5)
+    assert markers()[0].value() == pytest.approx(0.5)  # redrawn exactly on the beat
+    beats = window.controller.project.grid.generate_beats(end_time_sec=2.0)
+    assert [b.time_sec for b in beats if b.is_downbeat] == [0.5]
+
+
+def test_loading_starts_zoomed_to_half_the_track_with_a_matching_scrollbar(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)  # 2 s stems
+
+    view_box = window.track_views["kick"].view_box()
+    x_min, x_max = view_box.viewRange()[0]
+    assert (x_min, x_max) == (pytest.approx(0.0), pytest.approx(1.0))
+
+    bar = window.time_scrollbar
+    assert bar.isEnabled()
+    assert bar.pageStep() == 1000  # 1 s visible, in ms
+    assert (bar.minimum(), bar.maximum(), bar.value()) == (0, 1000, 0)
+
+
+def test_scrollbar_pans_every_track_and_follows_zooming(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    window.time_scrollbar.setValue(600)
+    for stem_id in ("kick", "bass"):
+        x_min, x_max = window.track_views[stem_id].view_box().viewRange()[0]
+        assert (x_min, x_max) == (pytest.approx(0.6), pytest.approx(1.6))
+
+    # zooming in a track (e.g. mouse wheel) resizes and moves the handle
+    window.track_views["bass"].view_box().setXRange(0.2, 0.7, padding=0)
+    bar = window.time_scrollbar
+    assert (bar.pageStep(), bar.value(), bar.maximum()) == (500, 200, 1500)
+
+
+def test_loading_reports_progress_and_closes_the_dialog(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QProgressDialog
+
+    labels = []
+    real_set_label = QProgressDialog.setLabelText
+    monkeypatch.setattr(
+        QProgressDialog,
+        "setLabelText",
+        lambda self, text: (labels.append(text), real_set_label(self, text))[1],
+    )
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+
+    assert labels == [
+        "Loading kick.wav (1/2)...",
+        "Loading bass.wav (2/2)...",
+        "Detecting beats on kick...",
+    ]
+    assert not any(
+        isinstance(w, QProgressDialog) and w.isVisible()
+        for w in window.findChildren(QProgressDialog)
+    )

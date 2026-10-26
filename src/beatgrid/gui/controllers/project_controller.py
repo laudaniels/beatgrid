@@ -135,6 +135,18 @@ class ProjectController(QObject):
         self._project.grid.beat_offsets = dict(offsets)
         self.project_changed.emit()
 
+    def set_downbeat(self, time_sec: float) -> None:
+        """Make the beat nearest `time_sec` (project time) bar 1, beat 1; the
+        stored time is that beat's own, so the marker sits exactly on it."""
+        reference = self._project.reference_stem()
+        beats = self._project.grid.generate_beats(end_time_sec=reference.duration_sec)
+        if not beats:
+            raise ValueError("no beats to put a downbeat on")
+        nearest = min(beats, key=lambda b: abs(b.time_sec - time_sec))
+        self._push_undo()
+        self._project.grid.downbeat_sec = nearest.time_sec
+        self.project_changed.emit()
+
     def set_reference_stem(self, stem_id: str) -> None:
         if stem_id not in {stem.id for stem in self._project.stems}:
             raise ValueError(f"stem {stem_id!r} not in project")

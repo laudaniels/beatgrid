@@ -251,3 +251,22 @@ def test_anchor_edits_clear_beat_offsets():
     controller.set_beat_offsets({1: 0.01})
     controller.remove_anchor(anchor_id)
     assert controller.project.grid.beat_offsets == {}
+
+
+def test_set_downbeat_lands_on_the_nearest_beat_and_is_undoable():
+    controller = _controller()  # anchor at 0 s, 120 BPM: beats every 0.5 s
+
+    controller.set_downbeat(1.12)
+
+    assert controller.project.grid.downbeat_sec == 1.0
+    beats = controller.project.grid.generate_beats(end_time_sec=3.0)
+    assert [b.time_sec for b in beats if b.is_downbeat] == [1.0]
+    controller.undo()
+    assert controller.project.grid.downbeat_sec is None
+
+
+def test_anchor_edits_keep_the_downbeat():
+    controller = _controller()
+    controller.set_downbeat(1.0)
+    controller.move_anchor("a1", 0.02)
+    assert controller.project.grid.downbeat_sec == 1.0

@@ -98,3 +98,16 @@ def test_beat_offsets_roundtrip_and_default_for_older_projects(tmp_path):
     del data["grid"]["beat_offsets"]
     path.write_text(json.dumps(data))
     assert load_project(path).grid.beat_offsets == {}
+
+
+def test_downbeat_roundtrip_and_default_for_older_projects(tmp_path):
+    project = _sample_project()
+    project.grid.downbeat_sec = 12.48
+    path = tmp_path / "test.beatgrid"
+    save_project(project, path)
+    assert load_project(path).grid.downbeat_sec == 12.48
+
+    data = json.loads(path.read_text())
+    del data["grid"]["downbeat_sec"]
+    path.write_text(json.dumps(data))
+    assert load_project(path).grid.downbeat_sec is None

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,12 @@ class BeatGrid:
     # separate from the anchors so a live-played grid doesn't need one
     # anchor per beat; any anchor edit invalidates (clears) it.
     beat_offsets: dict[int, float] = field(default_factory=dict)
+    # Project time of a beat that starts a bar (the user-movable "first
+    # downbeat" marker); bars are counted from the beat nearest to it, beats
+    # before it form a pickup (bar 0 and below). None: the earliest anchor.
+    # Stored as a time rather than a beat index because adding an anchor
+    # before the first one renumbers every beat index.
+    downbeat_sec: float | None = None
 
     def renumber_anchors(self) -> None:
         """Recompute every anchor's beat_index from its neighbors' timing and
@@ -112,7 +118,27 @@ class BeatGrid:
                 )
                 n += 1
 
-        return beats
+        return self._count_bars_from_downbeat(beats)
+
+    def downbeat_index(self, beats: list[Beat]) -> int:
+        """Index of the beat that is bar 1, beat 1: the beat nearest to
+        `downbeat_sec`, or the earliest anchor's beat when that's unset."""
+        if self.downbeat_sec is None or not beats:
+            return min(self.anchors, key=lambda a: a.time_sec).beat_index if self.anchors else 0
+        return min(beats, key=lambda b: abs(b.time_sec - self.downbeat_sec)).index
+
+    def _count_bars_from_downbeat(self, beats: list[Beat]) -> list[Beat]:
+        numerator = self.time_signature.numerator
+        first = self.downbeat_index(beats)
+        return [
+            replace(
+                beat,
+                bar=(beat.index - first) // numerator + 1,
+                beat_in_bar=(beat.index - first) % numerator + 1,
+                is_downbeat=(beat.index - first) % numerator == 0,
+            )
+            for beat in beats
+        ]
 
 
 def average_bpm(beats: list[Beat]) -> float:

@@ -386,3 +386,65 @@ def test_bar_aligned_padding_is_zero_when_already_on_a_bar():
     project = Project(name="t", stems=[stem], reference_stem_id="a", grid=grid)
 
     assert bar_aligned_padding(project, target_bpm=120.0)["a"] == pytest.approx(0.0)
+
+
+def test_bar_aligned_padding_follows_a_moved_downbeat():
+    from beatgrid.render.warp_renderer import bar_aligned_padding
+
+    # first beat (anchor) at 3.3 s, but bar 1 starts one beat later, at 3.8 s
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4),
+        anchors=[_anchor(3.3, 0, 120.0)],
+        sample_rate=44100,
+        downbeat_sec=3.8,
+    )
+    stem = Stem(id="a", path=Path("a.wav"), sample_rate=44100, duration_sec=10.0)
+    project = Project(name="t", stems=[stem], reference_stem_id="a", grid=grid)
+
+    padding = bar_aligned_padding(project, target_bpm=120.0)
+
+    # the downbeat (3.8 s) lands on 4.0 s = 2 whole bars into the file
+    assert 3.8 + padding["a"] == pytest.approx(4.0)
+
+
+def test_render_warp_swaps_in_complete_files_and_leaves_no_partials(tmp_path, monkeypatch):
+    """A reader that opens the output the moment it appears must already
+    see the tempo chunk -- the file is only ever replaced whole."""
+    pytest.importorskip("pedalboard")
+    import os as os_module
+
+    from beatgrid.audio.loader import LoadedAudio
+    from beatgrid.render.engines.pedalboard_stretcher import PedalboardStretcher
+    from beatgrid.render.wav_markers import read_acid_tempo
+
+    sample_rate = 22050
+    track = make_click_track(bpm=120.0, duration_sec=2.0, sample_rate=sample_rate)
+    path = tmp_path / "kick.wav"
+    sf.write(path, track.audio, sample_rate)
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4),
+        anchors=[_anchor(0.0, 0, 120.0)],
+        sample_rate=sample_rate,
+    )
+    stem = Stem(id="kick", path=path, sample_rate=sample_rate, duration_sec=2.0)
+    project = Project(name="t", stems=[stem], reference_stem_id="kick", grid=grid)
+
+    seen_on_arrival = []
+    real_replace = os_module.replace
+
+    def spying_replace(src, dst):
+        seen_on_arrival.append(read_acid_tempo(src))
+        real_replace(src, dst)
+
+    monkeypatch.setattr("beatgrid.render.warp_renderer.os.replace", spying_replace)
+    output_dir = tmp_path / "warped"
+    render_warp(
+        project,
+        target_bpm=125.0,
+        engine=PedalboardStretcher(),
+        output_dir=output_dir,
+        audio_by_stem={"kick": LoadedAudio(audio=track.audio, sample_rate=sample_rate)},
+    )
+
+    assert seen_on_arrival and seen_on_arrival[0][0] == pytest.approx(125.0)
+    assert [p.name for p in output_dir.iterdir()] == ["kick_warped.wav"]

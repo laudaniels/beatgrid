@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -195,17 +196,23 @@ def render_warp(
         pad = round(padding_sec[stem.id] * loaded.sample_rate)
         warped = np.concatenate([np.zeros(pad, dtype=np.float32), warped])
         out_path = output_dir / f"{stem.id}_warped.wav"
-        sf.write(out_path, warped, loaded.sample_rate)
+        # Build the complete file (audio, markers, tempo) under a temporary
+        # name and only then swap it in: a DAW that has the previous render
+        # loaded may reload it the moment it changes, and would otherwise
+        # catch a plain WAV without markers/tempo in between.
+        partial = out_path.with_name(f".{out_path.name}.partial")
+        sf.write(partial, warped, loaded.sample_rate, format="WAV")
         if uses_timemap:
             markers = bar_markers(beats, stem, loaded.sample_rate, target_bpm, len(loaded.audio))
-            add_cue_markers(out_path, [(sample + pad, label) for sample, label in markers])
+            add_cue_markers(partial, [(sample + pad, label) for sample, label in markers])
         add_acid_tempo(
-            out_path,
+            partial,
             target_bpm,
             num_beats=round(len(warped) / loaded.sample_rate * target_bpm / 60.0),
             numerator=project.grid.time_signature.numerator,
             denominator=project.grid.time_signature.denominator,
         )
+        os.replace(partial, out_path)
         output_paths[stem.id] = out_path
 
     if on_progress is not None:
@@ -220,19 +227,29 @@ def render_warp(
 
 def bar_aligned_padding(project: Project, target_bpm: float) -> dict[str, float]:
     """Seconds of silence to put before each stem's warped audio so that the
-    grid's first downbeat (the earliest anchor, which the warp leaves in
-    place) lands on a whole bar counted from the start of the file -- the
-    *same* bar in every stem -- so the files line up with a DAW's grid
-    (and with each other) when dropped at bar 1."""
-    first_anchor_sec = min(anchor.time_sec for anchor in project.grid.anchors)
-    bar_sec = project.grid.time_signature.numerator * 60.0 / target_bpm
-    first_beat_sec = {
-        stem.id: max(0.0, project_time_to_stem_time(first_anchor_sec, stem))
+    grid's first downbeat lands on a whole bar counted from the start of the
+    file -- the *same* bar in every stem -- so the files line up with a
+    DAW's grid (and with each other) when dropped at bar 1.
+
+    The warp leaves the first beat in place and spaces every later beat at
+    exactly the target tempo, so the first downbeat ends up a whole number
+    of target-tempo beats after the first beat.
+    """
+    grid = project.grid
+    beats = grid.generate_beats(end_time_sec=project.reference_stem().duration_sec)
+    beat_sec = 60.0 / target_bpm
+    bar_sec = grid.time_signature.numerator * beat_sec
+    first_beat = beats[0]
+    first_downbeat = next(b for b in beats if b.is_downbeat)
+    downbeat_after_first_beat = (first_downbeat.index - first_beat.index) * beat_sec
+    first_downbeat_sec = {
+        stem.id: max(0.0, project_time_to_stem_time(first_beat.time_sec, stem))
+        + downbeat_after_first_beat
         for stem in project.stems
     }
-    # tiny tolerance: a first beat already on a bar line needs no extra bar
-    bars = max(math.ceil(t / bar_sec - 1e-9) for t in first_beat_sec.values())
-    return {stem_id: bars * bar_sec - t for stem_id, t in first_beat_sec.items()}
+    # tiny tolerance: a downbeat already on a bar line needs no extra bar
+    bars = max(math.ceil(t / bar_sec - 1e-9) for t in first_downbeat_sec.values())
+    return {stem_id: bars * bar_sec - t for stem_id, t in first_downbeat_sec.items()}
 
 
 def bar_markers(

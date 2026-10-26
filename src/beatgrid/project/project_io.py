@@ -60,6 +60,7 @@ def _grid_from_dict(data: dict) -> BeatGrid:
         sample_rate=data["sample_rate"],
         # JSON object keys are strings; older projects have no offsets
         beat_offsets={int(k): v for k, v in data.get("beat_offsets", {}).items()},
+        downbeat_sec=data.get("downbeat_sec"),
     )
 
 

@@ -8,6 +8,7 @@ from beatgrid.audio.loader import LoadedAudio
 from beatgrid.detection.transient import DriftPoint
 from beatgrid.grid.model import Beat
 from beatgrid.gui.widgets.anchor_item import AnchorItem
+from beatgrid.gui.widgets.axes import BarAxisItem, TimeAxisItem
 from beatgrid.gui.widgets.drift_overlay import DriftOverlay
 from beatgrid.gui.widgets.grid_overlay import GridOverlay
 from beatgrid.gui.widgets.stem_panel import StemPanel
@@ -33,7 +34,10 @@ class StemTrackView(QWidget):
         self.stem_panel = StemPanel(stem)
         layout.addWidget(self.stem_panel)
 
-        self.plot_widget = pg.PlotWidget()
+        self.bar_axis = BarAxisItem("top")
+        self.plot_widget = pg.PlotWidget(
+            axisItems={"bottom": TimeAxisItem("bottom"), "top": self.bar_axis}
+        )
         self.plot_widget.setMouseEnabled(x=True, y=False)
         self.plot_widget.setMenuEnabled(False)
         self.plot_widget.setClipToView(True)
@@ -75,13 +79,23 @@ class StemTrackView(QWidget):
     def set_beats(self, beats: list[Beat]) -> None:
         self.grid_overlay.set_beats(beats, self._stem)
 
+    def set_bar_numbers(self, bars: list[tuple[float, int]] | None) -> None:
+        """Show bar numbers ((local downbeat time, bar) pairs) along the top,
+        or hide that axis with None -- only the reference row shows them."""
+        if bars is None:
+            self.plot_widget.getPlotItem().hideAxis("top")
+            return
+        self.bar_axis.set_bars(bars)
+        self.plot_widget.getPlotItem().showAxis("top")
+
     def set_drift_points(self, points: list[DriftPoint]) -> None:
         self.drift_overlay.set_points(points)
 
     def clear_drift_points(self) -> None:
         self.drift_overlay.clear()
 
-    def add_anchor_item(self, item: AnchorItem) -> None:
+    def add_anchor_item(self, item: pg.InfiniteLine) -> None:
+        """An anchor or the downbeat marker; both are cleared together."""
         self._anchor_items.append(item)
         self.plot_widget.addItem(item)
 

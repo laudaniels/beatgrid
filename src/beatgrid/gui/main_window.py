@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as wait_for
 from datetime import datetime
 from pathlib import Path
+from typing import TypeVar
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
@@ -13,7 +17,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QScrollArea,
+    QScrollBar,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -33,6 +39,7 @@ from beatgrid.gui.controllers.project_controller import ProjectController
 from beatgrid.gui.playback.audio_player import AudioPlayer, PlaybackStem
 from beatgrid.gui.playback.metronome import build_metronome
 from beatgrid.gui.widgets.anchor_item import AnchorItem
+from beatgrid.gui.widgets.downbeat_item import DownbeatItem
 from beatgrid.gui.widgets.stem_track_view import StemTrackView
 from beatgrid.gui.widgets.transport_bar import TransportBar
 from beatgrid.gui.widgets.warp_dialog import WarpDialog
@@ -43,8 +50,12 @@ from beatgrid.render.warp_renderer import render_warp
 
 DEFAULT_BPM = 120.0
 DRIFT_THRESHOLD_SEC = 0.02
-SNAP_TOLERANCE_SEC = 0.06
+INITIAL_VIEW_FRACTION = 0.5  # show the first half of the track after loading
+SNAP_TOLERANCE_SEC = 0.04  # around where the band currently is, see grid/snap.py
 PLAYHEAD_TIMER_INTERVAL_MS = 33  # ~30Hz
+
+
+T = TypeVar("T")
 
 
 class MainWindow(QMainWindow):
@@ -61,6 +72,7 @@ class MainWindow(QMainWindow):
         self._selected_anchor_id: str | None = None
         self._audio_player: AudioPlayer | None = None
         self._current_project_path: Path | None = None
+        self._time_view_box = None  # the reference track's view box; all rows link to it
 
         self._playhead_timer = QTimer(self)
         self._playhead_timer.setInterval(PLAYHEAD_TIMER_INTERVAL_MS)
@@ -136,8 +148,9 @@ class MainWindow(QMainWindow):
 
         snap_beats_action = QAction("Snap beats", self)
         snap_beats_action.setToolTip(
-            "Snap every beat to the nearest transient on the reference stem "
-            f"(within ±{SNAP_TOLERANCE_SEC * 1000:.0f} ms)"
+            "Make the grid follow the band: snap every beat to a transient on the "
+            f"reference stem (within ±{SNAP_TOLERANCE_SEC * 1000:.0f} ms of the band's "
+            "current timing)"
         )
         snap_beats_action.triggered.connect(self._on_snap_beats)
         toolbar.addAction(snap_beats_action)
@@ -190,6 +203,11 @@ class MainWindow(QMainWindow):
         wrapper_layout = QVBoxLayout(wrapper)
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
         wrapper_layout.addWidget(scroll_area)
+        # scrolls the (linked) time axis of every track at once
+        self.time_scrollbar = QScrollBar(Qt.Orientation.Horizontal)
+        self.time_scrollbar.setEnabled(False)
+        self.time_scrollbar.valueChanged.connect(self._on_time_scrolled)
+        wrapper_layout.addWidget(self.time_scrollbar)
         wrapper_layout.addWidget(self.transport_bar)
         self.setCentralWidget(wrapper)
 
@@ -211,8 +229,15 @@ class MainWindow(QMainWindow):
         flow; also used directly by tests without a file dialog."""
         audio_by_id: dict[str, LoadedAudio] = {}
         stems: list[Stem] = []
-        for path in paths:
-            loaded = load_audio(path)
+        progress = self._start_progress("Loading stems", len(paths))
+        for i, path in enumerate(paths):
+            progress.setLabelText(f"Loading {path.name} ({i + 1}/{len(paths)})...")
+            progress.setValue(i)
+            try:
+                loaded = self._in_background(load_audio, path)
+            except Exception:
+                progress.close()
+                raise
             stem_id = path.stem
             stems.append(
                 Stem(
@@ -227,7 +252,12 @@ class MainWindow(QMainWindow):
 
         reference_stem_id = default_reference_stem_id(stems)
         reference_audio = audio_by_id[reference_stem_id]
-        anchor_time, bpm = self._detect_initial_anchor(reference_audio)
+        progress.setLabelText(f"Detecting beats on {reference_stem_id}...")
+        progress.setRange(0, 0)  # busy indicator: detection can't report progress
+        try:
+            anchor_time, bpm = self._detect_initial_anchor(reference_audio)
+        finally:
+            progress.close()
         grid = BeatGrid(
             time_signature=TimeSignature(4, 4),
             anchors=[
@@ -255,11 +285,15 @@ class MainWindow(QMainWindow):
         """(anchor_time, bpm) for a freshly loaded project, the same way the
         Detect action computes it. Falls back to t=0 at DEFAULT_BPM (with a
         warning) if detection fails, so loading itself never fails on it."""
+        detector_name = self.detector_combo.currentText()
+
+        def detect() -> tuple[float, float]:
+            result = get_detector(detector_name).detect(audio.audio, audio.sample_rate)
+            return propose_anchor(result.beat_times, audio.audio, audio.sample_rate)
+
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            detector = get_detector(self.detector_combo.currentText())
-            result = detector.detect(audio.audio, audio.sample_rate)
-            return propose_anchor(result.beat_times, audio.audio, audio.sample_rate)
+            return self._in_background(detect)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
             QMessageBox.warning(
                 self,
@@ -275,9 +309,37 @@ class MainWindow(QMainWindow):
         stem's audio from its stored path and restores the full grid
         (anchors, offsets, mute/solo) exactly as saved."""
         project = load_project(path)
-        audio_by_id = {stem.id: load_audio(stem.path) for stem in project.stems}
+        audio_by_id: dict[str, LoadedAudio] = {}
+        progress = self._start_progress("Opening project", len(project.stems))
+        try:
+            for i, stem in enumerate(project.stems):
+                progress.setLabelText(f"Loading {stem.path.name} ({i + 1}/{len(project.stems)})...")
+                progress.setValue(i)
+                audio_by_id[stem.id] = self._in_background(load_audio, stem.path)
+        finally:
+            progress.close()
         self._current_project_path = path
         self._activate_project(project, audio_by_id)
+
+    def _start_progress(self, title: str, steps: int) -> QProgressDialog:
+        progress = QProgressDialog("", None, 0, steps, self)  # no cancel button
+        progress.setWindowTitle(title)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setMinimumWidth(420)
+        progress.setValue(0)
+        return progress
+
+    @staticmethod
+    def _in_background(fn: Callable[..., T], *args: object) -> T:
+        """Run fn(*args) on a worker thread while keeping the GUI responsive
+        (progress dialogs repaint, busy bars animate); re-raises its error."""
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(fn, *args)
+            while not future.done():
+                QApplication.processEvents()
+                wait_for([future], timeout=0.03)
+            return future.result()
 
     def _activate_project(self, project: Project, audio_by_id: dict[str, LoadedAudio]) -> None:
         warnings = validate_stems(project.stems, reference_stem_id=project.reference_stem_id)
@@ -299,6 +361,7 @@ class MainWindow(QMainWindow):
         self._controller.project_changed.connect(self._redraw)
         self._build_track_views()
         self._redraw()
+        self._show_initial_view()
 
         if warnings:
             text = "\n".join(f"{w.stem_id}: {w.message}" for w in warnings)
@@ -331,8 +394,51 @@ class MainWindow(QMainWindow):
             else:
                 view.view_box().setXLink(reference_view_box)
 
+        self._time_view_box = reference_view_box
+        if reference_view_box is not None:
+            reference_view_box.sigXRangeChanged.connect(self._sync_time_scrollbar)
+
         self.reference_combo.setCurrentText(self._controller.project.reference_stem_id)
         self.reference_combo.blockSignals(False)
+
+    def _timeline_end_sec(self) -> float:
+        """Where the last stem ends on the project timeline."""
+        assert self._controller is not None
+        return max(
+            stem.start_offset_sec + stem.duration_sec for stem in self._controller.project.stems
+        )
+
+    def _show_initial_view(self) -> None:
+        if self._time_view_box is None:
+            return
+        self._time_view_box.setXRange(
+            0.0, self._timeline_end_sec() * INITIAL_VIEW_FRACTION, padding=0
+        )
+        self.time_scrollbar.setEnabled(True)
+        self._sync_time_scrollbar()
+
+    def _sync_time_scrollbar(self, *_args: object) -> None:
+        """Mirror the visible time range (after zooming/panning in a track)
+        in the scrollbar: handle size = visible span, position = its start.
+        Units are milliseconds."""
+        if self._time_view_box is None or self._controller is None:
+            return
+        x_min, x_max = self._time_view_box.viewRange()[0]
+        visible_ms = max(1, round((x_max - x_min) * 1000))
+        end_ms = round(self._timeline_end_sec() * 1000)
+        self.time_scrollbar.blockSignals(True)
+        self.time_scrollbar.setRange(0, max(0, end_ms - visible_ms))
+        self.time_scrollbar.setPageStep(visible_ms)
+        self.time_scrollbar.setSingleStep(max(1, visible_ms // 10))
+        self.time_scrollbar.setValue(round(x_min * 1000))
+        self.time_scrollbar.blockSignals(False)
+
+    def _on_time_scrolled(self, value_ms: int) -> None:
+        if self._time_view_box is None:
+            return
+        x_min, x_max = self._time_view_box.viewRange()[0]
+        start = value_ms / 1000
+        self._time_view_box.setXRange(start, start + (x_max - x_min), padding=0)
 
     def _redraw(self) -> None:
         assert self._controller is not None
@@ -347,7 +453,15 @@ class MainWindow(QMainWindow):
         for stem_id, view in self._track_views.items():
             view.set_beats(beats)
             view.clear_anchor_items()
+            view.set_bar_numbers(None)
             if stem_id == project.reference_stem_id:
+                view.set_bar_numbers(
+                    [
+                        (project_time_to_stem_time(b.time_sec, reference_stem), b.bar)
+                        for b in beats
+                        if b.is_downbeat
+                    ]
+                )
                 for anchor in project.grid.anchors:
                     anchor_local_time = project_time_to_stem_time(anchor.time_sec, reference_stem)
                     item = AnchorItem(
@@ -356,6 +470,13 @@ class MainWindow(QMainWindow):
                     item.position_changed.connect(self._on_anchor_moved)
                     item.selected.connect(self._on_anchor_selected)
                     view.add_anchor_item(item)
+                first_downbeat = next((b for b in beats if b.bar == 1 and b.is_downbeat), None)
+                if first_downbeat is not None:
+                    marker = DownbeatItem(
+                        project_time_to_stem_time(first_downbeat.time_sec, reference_stem)
+                    )
+                    marker.moved.connect(self._on_downbeat_moved)
+                    view.add_anchor_item(marker)
 
             if self._show_drift:
                 stem = next(s for s in project.stems if s.id == stem_id)
@@ -414,6 +535,11 @@ class MainWindow(QMainWindow):
         project_time = new_local_time_sec + reference_stem.start_offset_sec
         self._selected_anchor_id = anchor_id
         self._controller.move_anchor(anchor_id, project_time)
+
+    def _on_downbeat_moved(self, new_local_time_sec: float) -> None:
+        assert self._controller is not None
+        reference_stem = self._controller.project.reference_stem()
+        self._controller.set_downbeat(stem_time_to_project_time(new_local_time_sec, reference_stem))
 
     def _on_anchor_selected(self, anchor_id: str) -> None:
         if self._selected_anchor_id == anchor_id:
@@ -529,10 +655,11 @@ class MainWindow(QMainWindow):
         self._redraw()
 
     def _on_snap_beats(self) -> None:
-        """Nudge each beat onto the nearest transient of the reference stem,
-        within SNAP_TOLERANCE_SEC (e.g. a live drummer slightly ahead of or
-        behind the constant-tempo grid). Anchors themselves stay put. Re-snaps
-        from the unsnapped grid, so repeated presses don't accumulate."""
+        """Make the grid follow the band: snap each beat onto a transient of
+        the reference stem within SNAP_TOLERANCE_SEC of where the band
+        currently is (grid/snap.py tracks a live drummer's drift off the
+        constant-tempo grid). Anchors themselves stay put. Re-snaps from the
+        unsnapped grid, so repeated presses don't accumulate."""
         if self._controller is None:
             return
         self._ensure_transients_cached()
@@ -545,15 +672,15 @@ class MainWindow(QMainWindow):
             stem_time_to_project_time(t, reference_stem)
             for t in self._transients_by_stem.get(reference_stem.id, [])
         ]
-        offsets = snap_offsets(
+        result = snap_offsets(
             beats,
             transients,
             max_distance_sec=SNAP_TOLERANCE_SEC,
-            skip_indices=frozenset(a.beat_index for a in project.grid.anchors),
+            anchor_indices=frozenset(a.beat_index for a in project.grid.anchors),
         )
-        self._controller.set_beat_offsets(offsets)
+        self._controller.set_beat_offsets(result.offsets)
         self.statusBar().showMessage(
-            f"Snapped {len(offsets)} of {len(beats)} beats to transients", 5000
+            f"Snapped {result.snapped} of {len(beats)} beats to transients", 5000
         )
 
     def _ensure_transients_cached(self) -> None:
