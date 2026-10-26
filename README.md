@@ -1,33 +1,68 @@
 # BeatGrid
 
 A local, visual beatgrid editor for multi-stem tracks: load up to ~10 stems of
-the same song, pick a reference stem (usually the kick), snap the first
-downbeat exactly onto the grid, and let BeatGrid propagate that grid to every
-other stem. Correct it visually and by ear with a metronome click. Optionally
-warp/time-stretch all stems onto a fixed tempo (Ableton warp-marker style).
+the same song, let BeatGrid detect the tempo on the drums stem, make the grid
+follow the band's live timing beat by beat, mark the first downbeat, and warp
+every stem onto one constant tempo -- the track's own -- so a DAW can take it
+from there. Correct everything visually and by ear with a metronome click.
 
 See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
 
+## Typical workflow (e.g. for FL Studio)
+
+1. **Load stems** (wav/flac/mp3). A stem with "drum" in its name becomes the
+   reference; beats are detected on it right away (tempos above 180 BPM are
+   folded to half time). A progress dialog shows loading and detection.
+2. Drag the cyan **"1" marker** at the top of the reference row onto the beat
+   where bar 1 starts; bar numbers along the top count from it.
+3. **Snap beats**: every beat moves onto the drum hit within ±40 ms of where
+   the band currently is, so the grid follows a live drummer drifting off a
+   single tempo (on one test track: +125 ms by 1:30). Add anchors where the
+   tempo really changes.
+4. **Warp...** defaults to the track's own average tempo, rounded to 2
+   decimals. Every stem is written to `<stem_dir>/warped/` (originals are
+   never touched) as a WAV that:
+   - plays at exactly that constant tempo,
+   - carries the tempo in an ACID chunk (FL Studio shows it as
+     "embedded" tempo when the sample is loaded),
+   - has a "Bar N" cue marker on every downbeat,
+   - starts with just enough silence that bar 1 lands on a whole bar, the
+     same one in every stem -- drop all stems at bar 1 and they sit on the
+     grid and line up with each other.
+5. In FL Studio, pick the embedded tempo and use Stretch Pro + tempo
+   automation to take the stems to any tempo.
+
+Always warp all stems together after changing the grid or the downbeat --
+a stem rendered on its own can end up a different length than the others.
+Files are written under a temporary name and swapped in whole, so a DAW
+that has the previous render loaded never catches a half-written file; it
+may still need the sample reloaded (or dragged in again) to pick up a new
+render.
+
 ## Status
 
-Through M10: load multiple stems, see their waveforms stacked with a shared
-grid (rendered from a multi-resolution peak pyramid, so zooming stays cheap
-even on long files), drag anchors on the reference stem to reposition the
-grid, run automatic BPM/beat detection ("Detect"), see non-blocking warnings
-when stems' sample rate/length/offset look inconsistent, propose
-cross-correlation based start offsets ("Detect offsets" — always a proposal
-you confirm, never applied automatically), mute/solo per stem, toggle a
-diagnostic "Show drift" overlay that marks where a stem's own transients
-stray from the shared grid without ever correcting it, add/remove anchors
-for tracks with tempo drift, undo/redo any edit, play the mixed stems back
-with mute/solo respected, a sample-accurate metronome click and a synced
-playhead, save/open the full project (`.beatgrid`), export the grid as JSON
-(schema in `docs/EXPORT_SCHEMA.md`), and warp all stems to a fixed tempo
-("Warp..." — written to `<stem_dir>/warped/`, never touching the originals,
-with a choice of engine: **rubberband-timemap**, the default production
-engine, native phase-continuous piecewise warping in one pass; or
-**pedalboard**, the M8 prototype, constant-ratio-per-segment with crossfaded
-splices). See the license trade-off between the two engines in `PLAN.md`.
+Through M10 plus the work after it: stacked waveforms with a shared grid
+(multi-resolution peak pyramid, so zooming stays cheap; a scrollbar pans all
+rows; the view opens on the first half of the track; time shown as m:ss),
+draggable anchors, automatic BPM/beat detection ("Detect", also run on
+load), tempo-following beat snapping ("Snap beats"), a movable first-downbeat
+marker, non-blocking warnings for inconsistent stems, proposed
+cross-correlation start offsets ("Detect offsets", always confirmed by you),
+mute/solo, a diagnostic "Show drift" overlay, add/remove anchors, undo/redo,
+playback of the mixed stems with a sample-accurate metronome click and a
+synced playhead (double-click a row to play from there), save/open projects
+(`.beatgrid`), JSON grid export (schema in `docs/EXPORT_SCHEMA.md`), and
+warping all stems to a fixed tempo with a choice of engine:
+**rubberband-timemap**, the default, or **pedalboard**, the M8 prototype
+(constant ratio per segment, crossfaded splices, no cue markers). See the
+license trade-off between the two in `PLAN.md`.
+
+The rubberband engine renders in 64-beat chunks, in parallel, joined at a
+common zero crossing: Rubber Band's own timemap drifts off its keyframes
+over a whole song, especially when the tempo changes beat to beat. In a
+test on a real snapped drum stem, 89% of snapped beats landed within 5 ms
+of the grid (a single pass: 67%), and five 8-minute stems warped in about
+8 seconds. The details are in `CLAUDE.md`.
 
 ### Keyboard shortcuts
 
@@ -39,6 +74,7 @@ splices). See the license trade-off between the two engines in `PLAN.md`.
 | `Ctrl+Shift+Z` | Redo |
 | `Delete` | Remove the selected anchor |
 | `Space` | Play / pause |
+| Double-click a row | Play from that position |
 
 Click an anchor on the reference stem's row to select it (the BPM field and
 nudge buttons act on whichever anchor is selected).
@@ -50,20 +86,17 @@ uv sync --extra core --extra gui --extra warp-prototype --extra warp --extra dev
 uv run python -m beatgrid.gui.app
 ```
 
-This opens a window to load stems (wav/flac/mp3), with a reference-stem
-picker, a detector picker + "Detect" button, BPM field and ms/sample nudge
-buttons for the first anchor. Needs an actual display — on WSL2 that means
-WSLg or an X server; headless environments can still run the structural
-tests via `QT_QPA_PLATFORM=offscreen uv run pytest tests/gui -m gui`.
+Needs an actual display -- on WSL2 that means WSLg (the window opens
+maximized on the largest screen) or an X server; headless environments can
+still run the structural tests via
+`QT_QPA_PLATFORM=offscreen uv run pytest tests/gui -m gui`.
 
 Detection-related tests (`uv run pytest -m "not gui"`) need the `core` extra
 (`uv sync --extra core`); the first run downloads and caches the Beat This!
 model checkpoint (~tens of MB) from the CPJKU cloud. Warp-related tests need
 the `warp-prototype` extra (pedalboard) and/or the `warp` extra
-(pyrubberband, plus `rubberband-cli` on `PATH` — see Prerequisites); each
-gracefully skips if its dependency isn't installed. Warping a multi-minute
-multi-stem project is slow (tens of seconds) with either engine — this
-hasn't been optimized for speed yet.
+(pyrubberband, plus `rubberband` on `PATH` -- see Prerequisites); each
+gracefully skips if its dependency isn't installed.
 
 ## Prerequisites
 
@@ -76,13 +109,33 @@ on your system `PATH`:
 - **PyTorch** (installed automatically via the `beat-this` dependency) is a
   heavier install than the rest of the stack — CPU inference is fine, this is
   one-off analysis, not realtime.
-- **rubberband-cli** — needed for the default production warp/time-stretch
-  engine (`rubberband-timemap`). Install via your system package manager
-  (e.g. `apt install rubberband-cli` / `brew install rubberband`). It is
-  GPL-licensed and invoked as a separate process, which is why it's lower
-  license-risk for our own MIT code than the `pedalboard` alternative engine
-  (GPL-3.0 as a whole) — see the trade-off in `PLAN.md`. Without it, warping
-  falls back to `pedalboard` if that's installed.
+- **Rubber Band 3.0 or newer** (the `rubberband` command) -- needed for the
+  default warp engine (`rubberband-timemap`), which uses the R3 engine
+  (`-3`); version 2.x doesn't have it. Ubuntu 22.04's `rubberband-cli` is
+  2.0.0, so build it from source there:
+
+  ```bash
+  sudo apt install build-essential meson ninja-build pkg-config \
+      libsndfile1-dev libsamplerate0-dev libfftw3-dev
+  wget https://breakfastquay.com/files/releases/rubberband-4.0.0.tar.bz2
+  tar xjf rubberband-4.0.0.tar.bz2 && cd rubberband-4.0.0
+  meson setup build -Dbuildtype=release -Dfft=fftw -Dresampler=libsamplerate
+  ninja -C build && sudo ninja -C build install && sudo ldconfig
+  ```
+
+  Rubber Band is GPL-licensed and invoked as a separate process, which is
+  why it's lower license-risk for our own MIT code than the `pedalboard`
+  alternative engine (GPL-3.0 as a whole) -- see the trade-off in `PLAN.md`.
+  Without it, warping falls back to `pedalboard` if that's installed.
+- **Audio playback under WSL2** -- PortAudio only talks ALSA, and WSLg only
+  provides a PulseAudio server. Install the ALSA pulse plugin
+  (`sudo apt install libasound2-plugins`) and route ALSA's default device
+  to it in `~/.asoundrc`:
+
+  ```
+  pcm.!default { type pulse }
+  ctl.!default { type pulse }
+  ```
 
 ## Development
 
