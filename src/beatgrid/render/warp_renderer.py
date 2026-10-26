@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,12 +11,12 @@ import soundfile as sf
 
 from beatgrid.audio.loader import LoadedAudio
 from beatgrid.grid.model import Beat, BeatGrid
-from beatgrid.grid.timeline import project_time_to_stem_sample
+from beatgrid.grid.timeline import project_time_to_stem_sample, project_time_to_stem_time
 from beatgrid.project.models import Project, Stem, WarpRender
 from beatgrid.render.chunked_timemap import stretch_in_chunks
 from beatgrid.render.engines.base import TimemapStretcher, TimeStretcher
 from beatgrid.render.timemap import build_timemap, place_beats
-from beatgrid.render.wav_markers import add_cue_markers
+from beatgrid.render.wav_markers import add_acid_tempo, add_cue_markers
 
 CROSSFADE_SEC = 0.008
 
@@ -151,6 +152,11 @@ def render_warp(
     path doesn't get markers: its crossfaded joins shift later audio by a
     few ms per anchor, so marker positions wouldn't be exact.
 
+    Every output file also declares `target_bpm` in an ACID chunk, so DAWs
+    that read it pick up the tempo without it being typed in, and starts
+    with just enough silence that the first downbeat sits on a whole bar
+    (bar_aligned_padding).
+
     `on_progress(done, total, stem_id)` is called before each stem is
     warped (stem_id = the one about to start) and once more at the end
     (done == total, stem_id == "").
@@ -171,6 +177,7 @@ def render_warp(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    padding_sec = bar_aligned_padding(project, target_bpm)
     output_paths: dict[str, Path] = {}
     total = len(project.stems)
     for done, stem in enumerate(project.stems):
@@ -185,13 +192,20 @@ def render_warp(
             warped = warp_stem_audio(
                 loaded.audio, loaded.sample_rate, stem, segments, target_bpm, engine
             )
+        pad = round(padding_sec[stem.id] * loaded.sample_rate)
+        warped = np.concatenate([np.zeros(pad, dtype=np.float32), warped])
         out_path = output_dir / f"{stem.id}_warped.wav"
         sf.write(out_path, warped, loaded.sample_rate)
         if uses_timemap:
-            add_cue_markers(
-                out_path,
-                bar_markers(beats, stem, loaded.sample_rate, target_bpm, len(loaded.audio)),
-            )
+            markers = bar_markers(beats, stem, loaded.sample_rate, target_bpm, len(loaded.audio))
+            add_cue_markers(out_path, [(sample + pad, label) for sample, label in markers])
+        add_acid_tempo(
+            out_path,
+            target_bpm,
+            num_beats=round(len(warped) / loaded.sample_rate * target_bpm / 60.0),
+            numerator=project.grid.time_signature.numerator,
+            denominator=project.grid.time_signature.denominator,
+        )
         output_paths[stem.id] = out_path
 
     if on_progress is not None:
@@ -202,6 +216,23 @@ def render_warp(
         rendered_at=datetime.now(),
         output_paths=output_paths,
     )
+
+
+def bar_aligned_padding(project: Project, target_bpm: float) -> dict[str, float]:
+    """Seconds of silence to put before each stem's warped audio so that the
+    grid's first downbeat (the earliest anchor, which the warp leaves in
+    place) lands on a whole bar counted from the start of the file -- the
+    *same* bar in every stem -- so the files line up with a DAW's grid
+    (and with each other) when dropped at bar 1."""
+    first_anchor_sec = min(anchor.time_sec for anchor in project.grid.anchors)
+    bar_sec = project.grid.time_signature.numerator * 60.0 / target_bpm
+    first_beat_sec = {
+        stem.id: max(0.0, project_time_to_stem_time(first_anchor_sec, stem))
+        for stem in project.stems
+    }
+    # tiny tolerance: a first beat already on a bar line needs no extra bar
+    bars = max(math.ceil(t / bar_sec - 1e-9) for t in first_beat_sec.values())
+    return {stem_id: bars * bar_sec - t for stem_id, t in first_beat_sec.items()}
 
 
 def bar_markers(

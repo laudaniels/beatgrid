@@ -484,11 +484,11 @@ def test_export_grid_writes_json(qtbot, tmp_path, monkeypatch):
     assert data["reference_stem"]["id"] == "kick"
 
 
-def test_open_warp_dialog_prefills_default_bpm_from_first_anchor(qtbot, tmp_path, monkeypatch):
+def test_open_warp_dialog_prefills_own_average_bpm_rounded(qtbot, tmp_path, monkeypatch):
     window = MainWindow()
     qtbot.addWidget(window)
-    _load_two_stems(window, tmp_path)
-    window.controller.set_anchor_bpm(window.controller.project.grid.anchors[0].id, 95.0)
+    _load_two_stems(window, tmp_path)  # 2 s stems
+    window.controller.set_anchor_bpm(window.controller.project.grid.anchors[0].id, 95.123)
 
     captured = {}
 
@@ -500,7 +500,7 @@ def test_open_warp_dialog_prefills_default_bpm_from_first_anchor(qtbot, tmp_path
 
     window._on_open_warp_dialog()
 
-    assert captured["bpm"] == pytest.approx(95.0)
+    assert captured["bpm"] == 95.12
 
 
 def test_warp_requested_success_adds_warp_render_and_shows_result(qtbot, tmp_path, monkeypatch):

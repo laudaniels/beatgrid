@@ -26,7 +26,7 @@ from beatgrid.detection.refine import propose_anchor
 from beatgrid.detection.registry import available_detectors, get_detector
 from beatgrid.detection.transient import compute_drift, detect_transients
 from beatgrid.export.registry import get_exporter
-from beatgrid.grid.model import Anchor, Beat, BeatGrid, TimeSignature
+from beatgrid.grid.model import Anchor, Beat, BeatGrid, TimeSignature, average_bpm
 from beatgrid.grid.snap import snap_offsets
 from beatgrid.grid.timeline import project_time_to_stem_time, stem_time_to_project_time
 from beatgrid.gui.controllers.project_controller import ProjectController
@@ -745,8 +745,13 @@ class MainWindow(QMainWindow):
         license trade-off between them."""
         if self._controller is None:
             return
-        default_bpm = self._controller.project.grid.anchors[0].bpm
-        dialog = WarpDialog(default_bpm, parent=self)
+        # default: the track's own overall tempo, rounded to 2 decimals so it
+        # can be typed into a DAW exactly (e.g. FL Studio's Stretch Pro)
+        project = self._controller.project
+        reference_stem = project.reference_stem()
+        beats = project.grid.generate_beats(end_time_sec=reference_stem.duration_sec)
+        own_bpm = average_bpm(beats) if len(beats) >= 2 else project.grid.anchors[0].bpm
+        dialog = WarpDialog(round(own_bpm, 2), parent=self)
         dialog.render_requested.connect(
             lambda bpm, engine_name: self._on_warp_requested(dialog, bpm, engine_name)
         )

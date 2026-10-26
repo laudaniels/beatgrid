@@ -1,4 +1,4 @@
-from beatgrid.grid.model import Anchor, BeatGrid, TimeSignature
+from beatgrid.grid.model import Anchor, BeatGrid, TimeSignature, average_bpm
 
 
 def _anchor(time_sec, beat_index, bpm, anchor_id="a"):
@@ -157,3 +157,14 @@ def test_beat_offsets_nudge_individual_beats():
 
     assert [b.time_sec for b in beats] == [1.0, 1.51, 2.0, 2.48]
     assert beats[1].sample_index == round(1.51 * 44100)
+
+
+def test_average_bpm_spans_anchors_with_different_tempos():
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4),
+        anchors=[_anchor(0.0, 0, 120.0, "a"), _anchor(4.0, 8, 60.0, "b")],
+        sample_rate=44100,
+    )
+    beats = grid.generate_beats(end_time_sec=8.5)  # 8 beats in 4 s, then 5 in 4 s
+
+    assert average_bpm(beats) == 60.0 * 12 / 8.0

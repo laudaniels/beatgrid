@@ -206,6 +206,14 @@ def test_render_warp_writes_non_destructive_files_and_returns_warp_render(tmp_pa
     )
 
     assert progress == [(0, 2, "kick"), (1, 2, "bass"), (2, 2, "")]
+    from beatgrid.render.wav_markers import read_acid_tempo
+
+    for path in result.output_paths.values():
+        bpm, num_beats, numerator, denominator = read_acid_tempo(path)
+        frames = sf.info(path).frames
+        assert bpm == pytest.approx(130.0, abs=1e-4)
+        assert num_beats == round(frames / sample_rate * 130.0 / 60.0)
+        assert (numerator, denominator) == (4, 4)
     assert isinstance(result, WarpRender)
     assert result.target_bpm == 130.0
     assert result.engine == "pedalboard"
@@ -343,3 +351,38 @@ def test_render_warp_raises_without_anchors(tmp_path):
             output_dir=tmp_path,
             audio_by_stem={},
         )
+
+
+def test_bar_aligned_padding_puts_first_downbeat_on_the_same_whole_bar_in_every_stem():
+    from beatgrid.render.warp_renderer import bar_aligned_padding
+
+    bpm = 120.0  # a 4/4 bar is 2.0 s
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(3.3, 0, bpm)], sample_rate=44100
+    )
+    stems = [
+        Stem(id="a", path=Path("a.wav"), sample_rate=44100, duration_sec=10.0),
+        # starts 0.5 s later on the project timeline: first beat at 2.8 s of its own audio
+        Stem(
+            id="b", path=Path("b.wav"), sample_rate=44100, duration_sec=10.0, start_offset_sec=0.5
+        ),
+    ]
+    project = Project(name="t", stems=stems, reference_stem_id="a", grid=grid)
+
+    padding = bar_aligned_padding(project, target_bpm=bpm)
+
+    # both stems' first downbeat ends up 4.0 s (2 whole bars) into the file
+    assert 3.3 + padding["a"] == pytest.approx(4.0)
+    assert 2.8 + padding["b"] == pytest.approx(4.0)
+
+
+def test_bar_aligned_padding_is_zero_when_already_on_a_bar():
+    from beatgrid.render.warp_renderer import bar_aligned_padding
+
+    grid = BeatGrid(
+        time_signature=TimeSignature(4, 4), anchors=[_anchor(4.0, 0, 120.0)], sample_rate=44100
+    )
+    stem = Stem(id="a", path=Path("a.wav"), sample_rate=44100, duration_sec=10.0)
+    project = Project(name="t", stems=[stem], reference_stem_id="a", grid=grid)
+
+    assert bar_aligned_padding(project, target_bpm=120.0)["a"] == pytest.approx(0.0)

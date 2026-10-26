@@ -113,3 +113,14 @@ class BeatGrid:
                 n += 1
 
         return beats
+
+
+def average_bpm(beats: list[Beat]) -> float:
+    """The track's own overall tempo: whole beats elapsed between the first
+    and last beat over the time between them -- what a constant-tempo warp
+    of the whole grid "to its own BPM" should use, even with several
+    anchors at different local tempos."""
+    if len(beats) < 2:
+        raise ValueError("need at least 2 beats for an average tempo")
+    first, last = min(beats, key=lambda b: b.index), max(beats, key=lambda b: b.index)
+    return 60.0 * (last.index - first.index) / (last.time_sec - first.time_sec)
