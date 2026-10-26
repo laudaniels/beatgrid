@@ -12,6 +12,7 @@ from beatgrid.audio.loader import LoadedAudio
 from beatgrid.grid.model import Beat, BeatGrid
 from beatgrid.grid.timeline import project_time_to_stem_sample
 from beatgrid.project.models import Project, Stem, WarpRender
+from beatgrid.render.chunked_timemap import stretch_in_chunks
 from beatgrid.render.engines.base import TimemapStretcher, TimeStretcher
 from beatgrid.render.timemap import build_timemap, place_beats
 from beatgrid.render.wav_markers import add_cue_markers
@@ -115,12 +116,17 @@ def warp_stem_audio_timemap(
     target_bpm: float,
     engine: TimemapStretcher,
 ) -> np.ndarray:
-    """Time-stretch one stem's audio in a single, phase-continuous pass via
-    a native timemap (render/timemap.py) — the M9 production path, used
-    instead of warp_stem_audio()'s manual segment-splitting/crossfading for
-    engines that support it (TimemapStretcher)."""
+    """Time-stretch one stem's audio via a native timemap (render/timemap.py)
+    — the M9 production path, used instead of warp_stem_audio()'s manual
+    segment-splitting/crossfading for engines that support it
+    (TimemapStretcher).
+
+    Rendered in 64-beat chunks (render/chunked_timemap.py) rather than one
+    pass: over a whole song Rubber Band's output drifts progressively off
+    the keyframes, worst with snapped beats' per-beat ratio changes; short
+    chunks keep beats within a few ms."""
     timemap = build_timemap(beats, stem, sample_rate, target_bpm, total_samples=len(audio))
-    return engine.stretch_with_timemap(audio, sample_rate, timemap)
+    return stretch_in_chunks(audio, sample_rate, timemap, engine.stretch_with_timemap)
 
 
 def render_warp(

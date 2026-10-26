@@ -119,3 +119,17 @@ milestones — read it before making architectural changes.
   de exe maar, als het kan draaien in Linux is prima"). Running the app
   normally via `uv run python -m beatgrid.gui.app` on Linux was the bar, not
   a compiled binary.
+- **Rubber Band's timemap is approximate; measure warp precision with a
+  method that's identical before and after the warp.** Findings (R3, CLI
+  4.0): it renders a timemap's *first segment unstretched* (fixed by the
+  engine's silent pre-roll); over a whole song its output drifts off the
+  keyframes (~+15 ms after 8 min even at a constant ratio); and per-beat
+  ratio changes (snapped beats) make it lose alignment that it never
+  regains within that render. Iteratively correcting the timemap doesn't
+  converge on real material. What works is `render/chunked_timemap.py`:
+  64-beat chunks with 2 beats of context, joined at a common zero crossing
+  plus a 2 ms fade — a normal crossfade between two renders of the same
+  audio dips in level wherever their phases differ. Short level windows
+  (10 ms) mismeasure low tones like a 55 Hz bass; use ≥50 ms. Earlier
+  "+18 ms late" readings came from comparing grid positions before the warp
+  with re-detected transients after it — two different measurements.
