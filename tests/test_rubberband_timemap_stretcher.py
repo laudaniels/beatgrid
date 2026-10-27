@@ -1,16 +1,13 @@
 import pytest
 
-pytest.importorskip("pyrubberband")
-
-from beatgrid.render.engines.rubberband_timemap_stretcher import (  # noqa: E402
+from beatgrid.render.engines.rubberband_timemap_stretcher import (
     RubberbandTimemapStretcher,
+    find_rubberband,
 )
 
 
 def _rubberband_cli_available() -> bool:
-    import shutil
-
-    return shutil.which("rubberband") is not None
+    return find_rubberband() is not None
 
 
 requires_rubberband = pytest.mark.skipif(

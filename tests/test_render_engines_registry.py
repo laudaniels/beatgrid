@@ -11,7 +11,10 @@ def test_pedalboard_is_available_when_installed():
 
 
 def test_rubberband_timemap_is_available_and_default_when_installed():
-    pytest.importorskip("pyrubberband")
+    from beatgrid.render.engines.rubberband_timemap_stretcher import find_rubberband
+
+    if find_rubberband() is None:
+        pytest.skip("rubberband is not installed")
     assert "rubberband-timemap" in available_engines()
     # preferred over pedalboard (lower GPL exposure, native piecewise warp)
     # whenever both are installed -- see PLAN.md's license trade-off.

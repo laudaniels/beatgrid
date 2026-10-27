@@ -76,7 +76,14 @@ class TitleBar(QWidget):
         )
 
     def eventFilter(self, watched, event: QEvent) -> bool:  # noqa: N802 - Qt API
-        if watched is self._window and event.type() == QEvent.Type.WindowStateChange:
+        # getattr: Qt can still deliver events while the window is being
+        # torn down, after this object's Python attributes are gone
+        window = getattr(self, "_window", None)
+        if (
+            window is not None
+            and watched is window
+            and event.type() == QEvent.Type.WindowStateChange
+        ):
             self._sync_maximize_button()
         return False
 

@@ -241,17 +241,13 @@ def _impulse_track(positions: list[int], length: int) -> np.ndarray:
 
 
 def _rubberband_available() -> bool:
-    import shutil
+    from beatgrid.render.engines.rubberband_timemap_stretcher import find_rubberband
 
-    try:
-        import pyrubberband  # noqa: F401
-    except ImportError:
-        return False
-    return shutil.which("rubberband") is not None
+    return find_rubberband() is not None
 
 
 requires_rubberband = pytest.mark.skipif(
-    not _rubberband_available(), reason="pyrubberband/rubberband-cli not installed"
+    not _rubberband_available(), reason="rubberband is not installed"
 )
 
 

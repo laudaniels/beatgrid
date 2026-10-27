@@ -13,15 +13,17 @@ try:
 except ImportError:
     pass  # pedalboard isn't installed (the "warp-prototype" extra)
 
-try:
-    from beatgrid.render.engines.rubberband_timemap_stretcher import RubberbandTimemapStretcher
+from beatgrid.render.engines.rubberband_timemap_stretcher import (  # noqa: E402
+    RubberbandTimemapStretcher,
+    find_rubberband,
+)
 
-    _REGISTRY["rubberband-timemap"] = RubberbandTimemapStretcher
-    DEFAULT_ENGINE_NAME = "rubberband-timemap"  # preferred over pedalboard when both are installed
-except ImportError:
-    pass  # pyrubberband isn't installed (the "warp" extra); rubberband-cli
-    # itself (a system binary, not a Python package) is only checked at
-    # actual render time, surfacing as a RuntimeError from pyrubberband.
+_REGISTRY["rubberband-timemap"] = RubberbandTimemapStretcher
+# Preferred whenever the separately installed `rubberband` program is there;
+# without it, fall back to pedalboard if that's installed (rendering with
+# rubberband-timemap would only fail with "not installed").
+if find_rubberband() is not None or DEFAULT_ENGINE_NAME is None:
+    DEFAULT_ENGINE_NAME = "rubberband-timemap"
 
 
 def register(name: str, engine_cls: type) -> None:
