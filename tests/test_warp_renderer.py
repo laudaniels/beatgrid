@@ -447,4 +447,4 @@ def test_render_warp_swaps_in_complete_files_and_leaves_no_partials(tmp_path, mo
     )
 
     assert seen_on_arrival and seen_on_arrival[0][0] == pytest.approx(125.0)
-    assert [p.name for p in output_dir.iterdir()] == ["kick_warped.wav"]
+    assert [p.name for p in output_dir.iterdir()] == ["kick_warped_125bpm.wav"]

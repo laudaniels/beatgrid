@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import subprocess
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait as wait_for
@@ -8,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypeVar
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,10 +43,16 @@ from beatgrid.gui.widgets.anchor_item import AnchorItem
 from beatgrid.gui.widgets.downbeat_item import DownbeatItem
 from beatgrid.gui.widgets.stem_track_view import StemTrackView
 from beatgrid.gui.widgets.transport_bar import TransportBar
-from beatgrid.gui.widgets.warp_dialog import WarpDialog
+from beatgrid.gui.widgets.warp_dialog import WarpDialog, format_size
 from beatgrid.project.models import Project, Stem, default_reference_stem_id
 from beatgrid.project.project_io import load_project, save_project
 from beatgrid.render.engines.registry import get_engine
+from beatgrid.render.warp_output import (
+    clean_warp_folder,
+    copy_files,
+    scan_warp_folder,
+    warp_output_dir,
+)
 from beatgrid.render.warp_renderer import render_warp
 
 DEFAULT_BPM = 120.0
@@ -53,6 +60,29 @@ DRIFT_THRESHOLD_SEC = 0.02
 INITIAL_VIEW_FRACTION = 0.5  # show the first half of the track after loading
 SNAP_TOLERANCE_SEC = 0.04  # around where the band currently is, see grid/snap.py
 PLAYHEAD_TIMER_INTERVAL_MS = 33  # ~30Hz
+
+
+def default_download_dir() -> Path:
+    """The Windows Downloads folder when running under WSL (found via
+    cmd.exe's %USERPROFILE% + wslpath), else ~/Downloads, else ~."""
+    try:
+        profile = subprocess.run(
+            ["cmd.exe", "/c", "echo %USERPROFILE%"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd="/mnt/c" if Path("/mnt/c").is_dir() else None,
+        ).stdout.strip()
+        if profile and "%" not in profile:
+            linux = subprocess.run(
+                ["wslpath", "-u", profile], capture_output=True, text=True, timeout=5
+            ).stdout.strip()
+            if linux and (Path(linux) / "Downloads").is_dir():
+                return Path(linux) / "Downloads"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    downloads = Path.home() / "Downloads"
+    return downloads if downloads.is_dir() else Path.home()
 
 
 T = TypeVar("T")
@@ -321,8 +351,10 @@ class MainWindow(QMainWindow):
         self._current_project_path = path
         self._activate_project(project, audio_by_id)
 
-    def _start_progress(self, title: str, steps: int) -> QProgressDialog:
-        progress = QProgressDialog("", None, 0, steps, self)  # no cancel button
+    def _start_progress(
+        self, title: str, steps: int, parent: QWidget | None = None
+    ) -> QProgressDialog:
+        progress = QProgressDialog("", None, 0, steps, parent or self)  # no cancel button
         progress.setWindowTitle(title)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
@@ -882,13 +914,79 @@ class MainWindow(QMainWindow):
         dialog.render_requested.connect(
             lambda bpm, engine_name: self._on_warp_requested(dialog, bpm, engine_name)
         )
+        dialog.download_requested.connect(lambda: self._on_download_warped(dialog))
+        dialog.cleanup_requested.connect(lambda: self._on_clean_warp_folder(dialog))
+        self._refresh_warp_files(dialog)
         dialog.exec()
+
+    def _latest_warp_files(self) -> list[Path]:
+        """The files of this project's most recent warp render that still exist."""
+        assert self._controller is not None
+        renders = self._controller.project.warp_renders
+        if not renders:
+            return []
+        return [path for path in renders[-1].output_paths.values() if path.exists()]
+
+    def _refresh_warp_files(self, dialog: WarpDialog) -> None:
+        assert self._controller is not None
+        folder = warp_output_dir(self._controller.project)
+        contents = scan_warp_folder(folder)
+        dialog.set_folder_contents(folder, len(contents.files), contents.total_bytes)
+        dialog.set_download_available(bool(self._latest_warp_files()))
+
+    def _on_download_warped(self, dialog: WarpDialog) -> None:
+        """Copy the latest render to a folder of the user's choice (by default
+        the Windows Downloads folder under WSL, so a Windows DAW can reach the
+        files without going through \\wsl$); remembers the folder."""
+        paths = self._latest_warp_files()
+        if not paths:
+            return
+        settings = QSettings("BeatGrid", "BeatGrid")
+        start = settings.value("download_dir", "") or str(default_download_dir())
+        destination = QFileDialog.getExistingDirectory(dialog, "Download warped stems to", start)
+        if not destination:
+            return
+        progress = self._start_progress("Downloading", len(paths), parent=dialog)
+        try:
+            for i, path in enumerate(paths):
+                progress.setLabelText(f"Copying {path.name} ({i + 1}/{len(paths)})...")
+                progress.setValue(i)
+                self._in_background(copy_files, [path], Path(destination))
+        except OSError as exc:
+            dialog.show_error(f"download failed: {exc}")
+            return
+        finally:
+            progress.close()
+        settings.setValue("download_dir", destination)
+        dialog.status_label.setText(f"Downloaded {len(paths)} files to {destination}")
+
+    def _on_clean_warp_folder(self, dialog: WarpDialog) -> None:
+        assert self._controller is not None
+        folder = warp_output_dir(self._controller.project)
+        contents = scan_warp_folder(folder)
+        if not contents.files:
+            return
+        size = format_size(contents.total_bytes)
+        answer = QMessageBox.question(
+            dialog,
+            "Clean up warped folder",
+            f"Delete {len(contents.files)} warped files ({size}) from\n{folder}?\n\n"
+            "Only BeatGrid's warp output is deleted; your original stems are not touched.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            deleted = clean_warp_folder(folder)
+        except OSError as exc:
+            dialog.show_error(f"clean-up failed: {exc}")
+        else:
+            dialog.status_label.setText(f"Deleted {len(deleted.files)} files ({size}).")
+        self._refresh_warp_files(dialog)
 
     def _on_warp_requested(self, dialog: WarpDialog, target_bpm: float, engine_name: str) -> None:
         assert self._controller is not None
         project = self._controller.project
-        reference_stem = project.reference_stem()
-        output_dir = reference_stem.path.parent / "warped"
+        output_dir = warp_output_dir(project)
 
         def on_progress(done: int, total: int, stem_id: str) -> None:
             dialog.show_progress(done, total, stem_id)
@@ -910,6 +1008,7 @@ class MainWindow(QMainWindow):
 
         self._controller.add_warp_render(warp_render)
         dialog.show_result(warp_render.output_paths)
+        self._refresh_warp_files(dialog)
 
     def _on_undo(self) -> None:
         if self._controller is not None:

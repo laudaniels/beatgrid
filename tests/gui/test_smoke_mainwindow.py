@@ -833,3 +833,102 @@ def test_loading_reports_progress_and_closes_the_dialog(qtbot, tmp_path, monkeyp
         isinstance(w, QProgressDialog) and w.isVisible()
         for w in window.findChildren(QProgressDialog)
     )
+
+
+class _FakeSettings:
+    store: dict = {}
+
+    def __init__(self, *_args):
+        pass
+
+    def value(self, key, default=None):
+        return self.store.get(key, default)
+
+    def setValue(self, key, value):  # noqa: N802 - Qt API
+        self.store[key] = value
+
+
+def _window_with_a_render(qtbot, tmp_path, monkeypatch):
+    """A loaded project whose latest warp render has two real files in
+    <stems>/warped, plus an unrelated file that must never be touched."""
+    from datetime import datetime
+
+    from beatgrid.gui.widgets.warp_dialog import WarpDialog
+    from beatgrid.project.models import WarpRender
+
+    monkeypatch.setattr("beatgrid.gui.main_window.QSettings", _FakeSettings)
+    _FakeSettings.store = {}
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+    warped = tmp_path / "warped"
+    warped.mkdir()
+    outputs = {}
+    for stem_id in ("kick", "bass"):
+        outputs[stem_id] = warped / f"{stem_id}_warped_120bpm.wav"
+        outputs[stem_id].write_bytes(b"x" * 1000)
+    (warped / "keep me.txt").write_text("not warp output")
+    window.controller.add_warp_render(
+        WarpRender(120.0, "rubberband-timemap", datetime.now(), outputs)
+    )
+    dialog = WarpDialog(120.0, parent=window)
+    qtbot.addWidget(dialog)
+    window._refresh_warp_files(dialog)
+    return window, dialog, warped
+
+
+def test_warp_dialog_shows_folder_contents_and_enables_download(qtbot, tmp_path, monkeypatch):
+    _window, dialog, _warped = _window_with_a_render(qtbot, tmp_path, monkeypatch)
+
+    assert dialog.cleanup_button.isEnabled()
+    assert dialog.cleanup_button.text() == "Clean up warped folder (2 files, 2 KB)..."
+    assert dialog.download_button.isEnabled()
+
+
+def test_download_copies_the_latest_render_and_remembers_the_folder(qtbot, tmp_path, monkeypatch):
+    window, dialog, _warped = _window_with_a_render(qtbot, tmp_path, monkeypatch)
+    destination = tmp_path / "Downloads"
+    destination.mkdir()
+    asked = []
+    monkeypatch.setattr("beatgrid.gui.main_window.default_download_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QFileDialog.getExistingDirectory",
+        lambda *args: asked.append(args[2]) or str(destination),
+    )
+
+    window._on_download_warped(dialog)
+
+    assert sorted(p.name for p in destination.iterdir()) == [
+        "bass_warped_120bpm.wav",
+        "kick_warped_120bpm.wav",
+    ]
+    assert asked == [str(tmp_path)]
+    assert _FakeSettings.store["download_dir"] == str(destination)
+    assert "Downloaded 2 files" in dialog.status_label.text()
+
+    window._on_download_warped(dialog)  # second time starts in the remembered folder
+    assert asked[-1] == str(destination)
+
+
+def test_clean_up_asks_first_and_deletes_only_warp_output(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window, dialog, warped = _window_with_a_render(qtbot, tmp_path, monkeypatch)
+
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QMessageBox.question",
+        lambda *a, **k: QMessageBox.StandardButton.No,
+    )
+    window._on_clean_warp_folder(dialog)
+    assert len(list(warped.iterdir())) == 3  # declined: nothing deleted
+
+    monkeypatch.setattr(
+        "beatgrid.gui.main_window.QMessageBox.question",
+        lambda *a, **k: QMessageBox.StandardButton.Yes,
+    )
+    window._on_clean_warp_folder(dialog)
+
+    assert [p.name for p in warped.iterdir()] == ["keep me.txt"]
+    assert dialog.cleanup_button.text() == "Clean up warped folder (empty)"
+    assert not dialog.cleanup_button.isEnabled()
+    assert not dialog.download_button.isEnabled()  # the latest render's files are gone

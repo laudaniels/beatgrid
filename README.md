@@ -21,7 +21,8 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
    tempo really changes.
 4. **Warp...** defaults to the track's own average tempo, rounded to 2
    decimals. Every stem is written to `<stem_dir>/warped/` (originals are
-   never touched) as a WAV that:
+   never touched) as `<stem>_warped_<bpm>bpm.wav` (e.g.
+   `Drums - Song_warped_118.54bpm.wav`), a WAV that:
    - plays at exactly that constant tempo,
    - carries the tempo in an ACID chunk (FL Studio shows it as
      "embedded" tempo when the sample is loaded),
@@ -29,7 +30,14 @@ See [`PLAN.md`](PLAN.md) for the full design, architecture and milestones.
    - starts with just enough silence that bar 1 lands on a whole bar, the
      same one in every stem -- drop all stems at bar 1 and they sit on the
      grid and line up with each other.
-5. In FL Studio, pick the embedded tempo and use Stretch Pro + tempo
+5. **Download...** in the same dialog copies the latest render to a folder
+   of your choice -- by default the Windows Downloads folder when running
+   under WSL, so a Windows DAW doesn't have to reach into `\\wsl$`; the
+   chosen folder is remembered. **Clean up warped folder** shows how many
+   warped files (and how much space) the `warped` folder holds and deletes
+   them after confirmation -- only files named `*_warped*.wav` (and
+   leftovers of an interrupted render), never anything else in that folder.
+6. In FL Studio, pick the embedded tempo and use Stretch Pro + tempo
    automation to take the stems to any tempo.
 
 Always warp all stems together after changing the grid or the downbeat --

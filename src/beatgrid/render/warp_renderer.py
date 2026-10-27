@@ -17,6 +17,7 @@ from beatgrid.project.models import Project, Stem, WarpRender
 from beatgrid.render.chunked_timemap import stretch_in_chunks
 from beatgrid.render.engines.base import TimemapStretcher, TimeStretcher
 from beatgrid.render.timemap import build_timemap, place_beats
+from beatgrid.render.warp_output import warped_filename
 from beatgrid.render.wav_markers import add_acid_tempo, add_cue_markers
 
 CROSSFADE_SEC = 0.008
@@ -195,7 +196,7 @@ def render_warp(
             )
         pad = round(padding_sec[stem.id] * loaded.sample_rate)
         warped = np.concatenate([np.zeros(pad, dtype=np.float32), warped])
-        out_path = output_dir / f"{stem.id}_warped.wav"
+        out_path = output_dir / warped_filename(stem.id, target_bpm)
         # Build the complete file (audio, markers, tempo) under a temporary
         # name and only then swap it in: a DAW that has the previous render
         # loaded may reload it the moment it changes, and would otherwise

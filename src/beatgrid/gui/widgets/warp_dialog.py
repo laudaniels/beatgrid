@@ -29,6 +29,8 @@ class WarpDialog(QDialog):
     render/warp_renderer.py, independent of the GUI."""
 
     render_requested = Signal(float, str)  # target_bpm, engine_name
+    download_requested = Signal()
+    cleanup_requested = Signal()
 
     def __init__(self, default_bpm: float, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -66,6 +68,18 @@ class WarpDialog(QDialog):
         self.close_button = QPushButton("Close")
         self.close_button.clicked.connect(self.accept)
 
+        self.download_button = QPushButton("Download...")
+        self.download_button.setToolTip("Copy the latest render's files to a folder of your choice")
+        self.download_button.setEnabled(False)
+        self.download_button.clicked.connect(self.download_requested.emit)
+        self.cleanup_button = QPushButton("Clean up warped folder")
+        self.cleanup_button.setEnabled(False)
+        self.cleanup_button.clicked.connect(self.cleanup_requested.emit)
+
+        files_row = QHBoxLayout()
+        files_row.addWidget(self.download_button)
+        files_row.addWidget(self.cleanup_button)
+
         buttons = QHBoxLayout()
         buttons.addWidget(self.render_button)
         buttons.addWidget(self.close_button)
@@ -76,6 +90,7 @@ class WarpDialog(QDialog):
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.results_view, 1)
         layout.addStretch(0)
+        layout.addLayout(files_row)
         layout.addLayout(buttons)
 
     @property
@@ -91,6 +106,9 @@ class WarpDialog(QDialog):
         progress updates, so the buttons would otherwise stay clickable)."""
         for widget in (self.render_button, self.close_button, self.bpm_spinbox, self.engine_combo):
             widget.setEnabled(not busy)
+        if busy:
+            self.download_button.setEnabled(False)
+            self.cleanup_button.setEnabled(False)
         if busy:
             self.results_view.setVisible(False)
             self.progress_bar.setValue(0)
@@ -113,5 +131,29 @@ class WarpDialog(QDialog):
         self.progress_bar.setVisible(False)
         self.status_label.setText(f"Failed: {message}")
 
+    def set_download_available(self, available: bool) -> None:
+        self.download_button.setEnabled(available)
+
+    def set_folder_contents(self, folder: Path, file_count: int, total_bytes: int) -> None:
+        """Show what the clean-up would delete on its button."""
+        if file_count:
+            self.cleanup_button.setText(
+                f"Clean up warped folder ({file_count} files, {format_size(total_bytes)})..."
+            )
+        else:
+            self.cleanup_button.setText("Clean up warped folder (empty)")
+        self.cleanup_button.setToolTip(str(folder))
+        self.cleanup_button.setEnabled(file_count > 0)
+
     def _on_render_clicked(self) -> None:
         self.render_requested.emit(self.target_bpm, self.engine_name)
+
+
+def format_size(num_bytes: int) -> str:
+    """e.g. 211.4 MB / 1.2 GB / 512 KB."""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit != "MB" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
