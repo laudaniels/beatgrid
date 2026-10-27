@@ -3,6 +3,8 @@ from __future__ import annotations
 import pyqtgraph as pg
 from PySide6.QtCore import Signal
 
+from beatgrid.gui import tooltips
+
 _UNSELECTED_PEN = pg.mkPen("y", width=2)
 _SELECTED_PEN = pg.mkPen((255, 80, 80), width=3)
 
@@ -23,6 +25,7 @@ class AnchorItem(pg.InfiniteLine):
             pen=_SELECTED_PEN if is_selected else _UNSELECTED_PEN,
         )
         self.anchor_id = anchor_id
+        self.setToolTip(tooltips.ANCHOR)
         self.sigPositionChangeFinished.connect(self._on_position_changed)
         self.sigClicked.connect(self._on_clicked)
 

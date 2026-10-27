@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from PySide6.QtCore import Signal
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from beatgrid.detection.refine import MAX_BPM
+from beatgrid.gui import tooltips
 from beatgrid.render.engines.registry import available_engines, default_engine_name
 
 
@@ -39,10 +41,12 @@ class WarpDialog(QDialog):
 
         self.bpm_spinbox = QDoubleSpinBox()
         self.bpm_spinbox.setRange(20.0, MAX_BPM)
+        self.bpm_spinbox.setToolTip(tooltips.WARP_TARGET_BPM)
         self.bpm_spinbox.setDecimals(2)
         self.bpm_spinbox.setValue(default_bpm)
 
         self.engine_combo = QComboBox()
+        self.engine_combo.setToolTip(tooltips.WARP_ENGINE)
         self.engine_combo.addItems(available_engines())
         default_engine = default_engine_name()
         if default_engine is not None:
@@ -64,16 +68,19 @@ class WarpDialog(QDialog):
         self.results_view.setVisible(False)
 
         self.render_button = QPushButton("Render")
+        self.render_button.setToolTip(tooltips.WARP_RENDER)
         self.render_button.clicked.connect(self._on_render_clicked)
         self.close_button = QPushButton("Close")
+        self.close_button.setToolTip(tooltips.WARP_CLOSE)
         self.close_button.clicked.connect(self.accept)
 
         self.download_button = QPushButton("Download...")
-        self.download_button.setToolTip("Copy the latest render's files to a folder of your choice")
+        self.download_button.setToolTip(tooltips.WARP_DOWNLOAD)
         self.download_button.setEnabled(False)
         self.download_button.clicked.connect(self.download_requested.emit)
         self.cleanup_button = QPushButton("Clean up warped folder")
         self.cleanup_button.setEnabled(False)
+        self.cleanup_button.setToolTip(tooltips.WARP_CLEANUP.format(folder="the warped folder"))
         self.cleanup_button.clicked.connect(self.cleanup_requested.emit)
 
         files_row = QHBoxLayout()
@@ -142,7 +149,9 @@ class WarpDialog(QDialog):
             )
         else:
             self.cleanup_button.setText("Clean up warped folder (empty)")
-        self.cleanup_button.setToolTip(str(folder))
+        self.cleanup_button.setToolTip(
+            tooltips.WARP_CLEANUP.format(folder=html.escape(str(folder)))
+        )
         self.cleanup_button.setEnabled(file_count > 0)
 
     def _on_render_clicked(self) -> None:

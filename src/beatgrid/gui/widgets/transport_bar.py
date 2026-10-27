@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from beatgrid.detection.refine import MAX_BPM
+from beatgrid.gui import tooltips
 
 NUDGE_MS_STEPS = (-10.0, -1.0, 1.0, 10.0)
 NUDGE_SAMPLE_STEPS = (-1, 1)
@@ -34,17 +35,22 @@ class TransportBar(QWidget):
 
         self.play_button = QPushButton("Play")
         self.play_button.setCheckable(True)
+        self.play_button.setToolTip(tooltips.PLAY)
         self.play_button.toggled.connect(self._on_play_toggled)
         layout.addWidget(self.play_button)
 
         self.metronome_checkbox = QCheckBox("Metronome")
+        self.metronome_checkbox.setToolTip(tooltips.METRONOME)
         self.metronome_checkbox.setChecked(True)
         self.metronome_checkbox.toggled.connect(self.metronome_toggled.emit)
         layout.addWidget(self.metronome_checkbox)
 
-        layout.addWidget(QLabel("BPM:"))
+        bpm_label = QLabel("BPM:")
+        bpm_label.setToolTip(tooltips.BPM)
+        layout.addWidget(bpm_label)
         self.bpm_spinbox = QDoubleSpinBox()
         self.bpm_spinbox.setRange(20.0, MAX_BPM)
+        self.bpm_spinbox.setToolTip(tooltips.BPM)
         self.bpm_spinbox.setDecimals(2)
         self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
         layout.addWidget(self.bpm_spinbox)
@@ -52,10 +58,14 @@ class TransportBar(QWidget):
         layout.addWidget(QLabel("Nudge:"))
         for delta_ms in NUDGE_MS_STEPS:
             button = QPushButton(f"{delta_ms:+.0f}ms")
+            button.setToolTip(tooltips.NUDGE_MS.format(amount=f"{abs(delta_ms):.0f} ms"))
             button.clicked.connect(self._make_ms_nudge_handler(delta_ms))
             layout.addWidget(button)
         for delta_samples in NUDGE_SAMPLE_STEPS:
             button = QPushButton(f"{delta_samples:+d}smp")
+            button.setToolTip(
+                tooltips.NUDGE_SAMPLE.format(direction="earlier" if delta_samples < 0 else "later")
+            )
             button.clicked.connect(self._make_sample_nudge_handler(delta_samples))
             layout.addWidget(button)
 

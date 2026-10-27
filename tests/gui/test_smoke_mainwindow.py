@@ -932,3 +932,49 @@ def test_clean_up_asks_first_and_deletes_only_warp_output(qtbot, tmp_path, monke
     assert dialog.cleanup_button.text() == "Clean up warped folder (empty)"
     assert not dialog.cleanup_button.isEnabled()
     assert not dialog.download_button.isEnabled()  # the latest render's files are gone
+
+
+def test_clicking_a_name_bar_enlarges_that_row_and_clicking_again_restores(qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    paths = []
+    for name in ("kick", "bass", "keys", "vox"):
+        path = tmp_path / f"{name}.wav"
+        _write_wav(path)
+        paths.append(path)
+    window.load_stems(paths)
+    layout = window._tracks_layout
+
+    def stretches():
+        return {sid: layout.stretch(layout.indexOf(v)) for sid, v in window.track_views.items()}
+
+    qtbot.mouseClick(window.track_views["bass"].stem_panel, Qt.MouseButton.LeftButton)
+    # bass weighs as much as the other three together: half the height
+    assert stretches() == {"kick": 1, "bass": 3, "keys": 1, "vox": 1}
+    assert window.track_views["bass"].stem_panel.name_label.font().bold()
+    assert window.controller.project.reference_stem_id == "kick"  # focus != reference
+
+    qtbot.mouseClick(window.track_views["keys"].stem_panel, Qt.MouseButton.LeftButton)
+    assert stretches() == {"kick": 1, "bass": 1, "keys": 3, "vox": 1}
+
+    qtbot.mouseClick(window.track_views["keys"].stem_panel, Qt.MouseButton.LeftButton)
+    assert set(stretches().values()) == {1}
+    assert not window.track_views["keys"].stem_panel.name_label.font().bold()
+
+
+def test_mute_checkbox_click_does_not_change_the_focus(qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    _load_two_stems(window, tmp_path)
+    window.show()
+    qtbot.waitExposed(window)  # laid out, so the click lands on the checkbox
+    panel = window.track_views["bass"].stem_panel
+
+    qtbot.mouseClick(panel.mute_checkbox, Qt.MouseButton.LeftButton)
+
+    assert panel.mute_checkbox.isChecked()
+    assert window._focused_stem_id is None

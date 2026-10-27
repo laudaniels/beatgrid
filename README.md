@@ -85,7 +85,20 @@ of the grid (a single pass: 67%), and five 8-minute stems warped in about
 | Double-click a row | Play from that position |
 
 Click an anchor on the reference stem's row to select it (the BPM field and
-nudge buttons act on whichever anchor is selected).
+nudge buttons act on whichever anchor is selected). Click a stem's name bar
+to give that row half of the tracks area (the others share the rest); click
+it again to restore equal heights -- this is only a view, independent of the
+reference stem. Every control explains itself when hovered.
+
+### Look and window
+
+The app uses a dark, blue-ish theme (`src/beatgrid/gui/theme.py`) and draws
+its own title bar and window outline: under WSLg, Qt's Wayland window
+decorations are a fixed light grey that can't follow the theme. Drag the
+title bar to move the window, double-click it (or use its middle button) to
+maximise/restore, and drag an edge or corner to resize a restored window.
+Tooltips are drawn inside the window they belong to, so they can't end up
+off-screen.
 
 ## Running the app
 

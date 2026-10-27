@@ -15,6 +15,8 @@ from beatgrid.gui.widgets.stem_panel import StemPanel
 from beatgrid.gui.widgets.waveform_item import WaveformItem
 from beatgrid.project.models import Stem
 
+PLOT_MIN_HEIGHT = 40
+
 
 class StemTrackView(QWidget):
     """One pyqtgraph plot row for a single stem: stem panel (name/mute/solo)
@@ -38,6 +40,9 @@ class StemTrackView(QWidget):
         self.plot_widget = pg.PlotWidget(
             axisItems={"bottom": TimeAxisItem("bottom"), "top": self.bar_axis}
         )
+        # pyqtgraph's own minimum (~68 px) would leave no room to enlarge one
+        # row (MainWindow's focus) once there are ~10 stems
+        self.plot_widget.setMinimumHeight(PLOT_MIN_HEIGHT)
         self.plot_widget.setMouseEnabled(x=True, y=False)
         self.plot_widget.setMenuEnabled(False)
         self.plot_widget.setClipToView(True)

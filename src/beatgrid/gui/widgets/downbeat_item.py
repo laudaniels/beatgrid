@@ -3,6 +3,8 @@ from __future__ import annotations
 import pyqtgraph as pg
 from PySide6.QtCore import Signal
 
+from beatgrid.gui import tooltips
+
 _PEN = pg.mkPen((60, 220, 255), width=3)
 _HOVER_PEN = pg.mkPen((150, 240, 255), width=4)
 # Only the top part of the row: an anchor usually sits on the same beat, and
@@ -29,6 +31,6 @@ class DownbeatItem(pg.InfiniteLine):
             label="1",
             labelOpts={"position": 0.95, "color": (60, 220, 255), "anchors": [(0, 0.5), (0, 0.5)]},
         )
-        self.setToolTip("First downbeat (bar 1): drag onto the beat where the first bar starts")
+        self.setToolTip(tooltips.FIRST_DOWNBEAT)
         self.setZValue(5)
         self.sigPositionChangeFinished.connect(lambda: self.moved.emit(float(self.value())))

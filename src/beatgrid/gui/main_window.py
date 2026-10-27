@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypeVar
 
-from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QRectF, QSettings, Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -36,14 +36,17 @@ from beatgrid.export.registry import get_exporter
 from beatgrid.grid.model import Anchor, Beat, BeatGrid, TimeSignature, average_bpm
 from beatgrid.grid.snap import snap_offsets
 from beatgrid.grid.timeline import project_time_to_stem_time, stem_time_to_project_time
+from beatgrid.gui import theme, tooltips
 from beatgrid.gui.controllers.project_controller import ProjectController
 from beatgrid.gui.playback.audio_player import AudioPlayer, PlaybackStem
 from beatgrid.gui.playback.metronome import build_metronome
 from beatgrid.gui.widgets.anchor_item import AnchorItem
 from beatgrid.gui.widgets.downbeat_item import DownbeatItem
 from beatgrid.gui.widgets.stem_track_view import StemTrackView
+from beatgrid.gui.widgets.title_bar import TitleBar
 from beatgrid.gui.widgets.transport_bar import TransportBar
 from beatgrid.gui.widgets.warp_dialog import WarpDialog, format_size
+from beatgrid.gui.window_frame import FRAME_WIDTH, OUTLINE_WIDTH, cursor_for, resize_edges
 from beatgrid.project.models import Project, Stem, default_reference_stem_id
 from beatgrid.project.project_io import load_project, save_project
 from beatgrid.render.engines.registry import get_engine
@@ -92,6 +95,12 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("BeatGrid")
+        # Frameless with BeatGrid's own title bar and outline: Qt's Wayland
+        # decorations under WSLg are a fixed light grey (widgets/title_bar.py).
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setMenuWidget(TitleBar(self))
+        self.setContentsMargins(FRAME_WIDTH, FRAME_WIDTH, FRAME_WIDTH, FRAME_WIDTH)
+        self.setMouseTracking(True)  # resize cursors on the window edge
         self.resize(1200, 700)
 
         self._controller: ProjectController | None = None
@@ -103,6 +112,7 @@ class MainWindow(QMainWindow):
         self._audio_player: AudioPlayer | None = None
         self._current_project_path: Path | None = None
         self._time_view_box = None  # the reference track's view box; all rows link to it
+        self._focused_stem_id: str | None = None  # row enlarged to half the height
 
         self._playhead_timer = QTimer(self)
         self._playhead_timer.setInterval(PLAYHEAD_TIMER_INTERVAL_MS)
@@ -110,6 +120,39 @@ class MainWindow(QMainWindow):
 
         self._build_toolbar()
         self._build_central_widget()
+
+    # --- frameless window: outline + resizing from the edges ---------------
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().paintEvent(event)
+        painter = QPainter(self)
+        pen = QPen(theme.OUTLINE, OUTLINE_WIDTH)
+        pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+        painter.setPen(pen)
+        half = OUTLINE_WIDTH / 2
+        painter.drawRect(QRectF(self.rect()).adjusted(half, half, -half, -half))
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if not self.isMaximized():
+            self.setCursor(cursor_for(resize_edges(event.position().toPoint(), self.rect())))
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        edges = resize_edges(event.position().toPoint(), self.rect())
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and edges
+            and not self.isMaximized()
+            and self.windowHandle() is not None
+            and self.windowHandle().startSystemResize(edges)
+        ):
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.unsetCursor()
+        super().leaveEvent(event)
 
     @property
     def controller(self) -> ProjectController | None:
@@ -124,84 +167,93 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
 
         load_action = QAction("Load stems...", self)
+        load_action.setToolTip(tooltips.LOAD_STEMS)
         load_action.triggered.connect(self._on_load_stems)
         toolbar.addAction(load_action)
 
         open_project_action = QAction("Open project...", self)
         open_project_action.setShortcut(QKeySequence.StandardKey.Open)
+        open_project_action.setToolTip(tooltips.OPEN_PROJECT)
         open_project_action.triggered.connect(self._on_open_project)
         toolbar.addAction(open_project_action)
 
         save_project_action = QAction("Save project...", self)
         save_project_action.setShortcut(QKeySequence.StandardKey.Save)
+        save_project_action.setToolTip(tooltips.SAVE_PROJECT)
         save_project_action.triggered.connect(self._on_save_project)
         toolbar.addAction(save_project_action)
 
         export_action = QAction("Export grid...", self)
+        export_action.setToolTip(tooltips.EXPORT_GRID)
         export_action.triggered.connect(self._on_export_grid)
         toolbar.addAction(export_action)
 
         self.undo_action = QAction("Undo", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.setEnabled(False)
+        self.undo_action.setToolTip(tooltips.UNDO)
         self.undo_action.triggered.connect(self._on_undo)
         toolbar.addAction(self.undo_action)
 
         self.redo_action = QAction("Redo", self)
         self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self.redo_action.setEnabled(False)
+        self.redo_action.setToolTip(tooltips.REDO)
         self.redo_action.triggered.connect(self._on_redo)
         toolbar.addAction(self.redo_action)
 
-        toolbar.addWidget(QLabel(" Reference stem: "))
+        reference_label = QLabel(" Reference stem: ")
+        reference_label.setToolTip(tooltips.REFERENCE_STEM)
+        toolbar.addWidget(reference_label)
         self.reference_combo = QComboBox()
+        self.reference_combo.setToolTip(tooltips.REFERENCE_STEM)
         self.reference_combo.currentTextChanged.connect(self._on_reference_changed)
         toolbar.addWidget(self.reference_combo)
 
-        toolbar.addWidget(QLabel(" Detector: "))
+        detector_label = QLabel(" Detector: ")
+        detector_label.setToolTip(tooltips.DETECTOR)
+        toolbar.addWidget(detector_label)
         self.detector_combo = QComboBox()
+        self.detector_combo.setToolTip(tooltips.DETECTOR)
         self.detector_combo.addItems(available_detectors())
         toolbar.addWidget(self.detector_combo)
 
         detect_action = QAction("Detect", self)
+        detect_action.setToolTip(tooltips.DETECT)
         detect_action.triggered.connect(self._on_detect)
         toolbar.addAction(detect_action)
 
         detect_offsets_action = QAction("Detect offsets", self)
+        detect_offsets_action.setToolTip(tooltips.DETECT_OFFSETS)
         detect_offsets_action.triggered.connect(self._on_detect_offsets)
         toolbar.addAction(detect_offsets_action)
 
         self.drift_action = QAction("Show drift", self)
         self.drift_action.setCheckable(True)
+        self.drift_action.setToolTip(tooltips.SHOW_DRIFT)
         self.drift_action.toggled.connect(self._on_toggle_drift)
         toolbar.addAction(self.drift_action)
 
         snap_beats_action = QAction("Snap beats", self)
         snap_beats_action.setToolTip(
-            "Make the grid follow the band: snap every beat to a transient on the "
-            f"reference stem (within ±{SNAP_TOLERANCE_SEC * 1000:.0f} ms of the band's "
-            "current timing)"
+            tooltips.SNAP_BEATS.format(tolerance_ms=round(SNAP_TOLERANCE_SEC * 1000))
         )
         snap_beats_action.triggered.connect(self._on_snap_beats)
         toolbar.addAction(snap_beats_action)
 
         add_anchor_action = QAction("Add anchor", self)
-        add_anchor_action.setToolTip(
-            "Add a new anchor at the center of the reference stem's current view"
-        )
+        add_anchor_action.setToolTip(tooltips.ADD_ANCHOR)
         add_anchor_action.triggered.connect(self._on_add_anchor)
         toolbar.addAction(add_anchor_action)
 
         self.remove_anchor_action = QAction("Remove anchor", self)
-        self.remove_anchor_action.setToolTip(
-            "Remove the selected anchor (click an anchor to select it)"
-        )
         self.remove_anchor_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
+        self.remove_anchor_action.setToolTip(tooltips.REMOVE_ANCHOR)
         self.remove_anchor_action.triggered.connect(self._on_remove_anchor)
         toolbar.addAction(self.remove_anchor_action)
 
         warp_action = QAction("Warp...", self)
-        warp_action.setToolTip("Warp/time-stretch all stems to a fixed tempo (prototype engine)")
+        warp_action.setToolTip(tooltips.WARP)
         warp_action.triggered.connect(self._on_open_warp_dialog)
         toolbar.addAction(warp_action)
 
@@ -236,6 +288,7 @@ class MainWindow(QMainWindow):
         # scrolls the (linked) time axis of every track at once
         self.time_scrollbar = QScrollBar(Qt.Orientation.Horizontal)
         self.time_scrollbar.setEnabled(False)
+        self.time_scrollbar.setToolTip(tooltips.TIME_SCROLLBAR)
         self.time_scrollbar.valueChanged.connect(self._on_time_scrolled)
         wrapper_layout.addWidget(self.time_scrollbar)
         wrapper_layout.addWidget(self.transport_bar)
@@ -391,6 +444,7 @@ class MainWindow(QMainWindow):
         self.drift_action.blockSignals(False)
         self._controller = ProjectController(project)
         self._controller.project_changed.connect(self._redraw)
+        self._focused_stem_id = None
         self._build_track_views()
         self._redraw()
         self._show_initial_view()
@@ -419,6 +473,7 @@ class MainWindow(QMainWindow):
             # stretch 1: rows share any extra height (the trailing stretch has 0)
             self._tracks_layout.insertWidget(self._tracks_layout.count() - 1, view, 1)
             self._track_views[stem.id] = view
+            view.stem_panel.clicked.connect(self._on_stem_name_clicked)
             self.reference_combo.addItem(stem.id)
 
             if reference_view_box is None:
@@ -432,6 +487,21 @@ class MainWindow(QMainWindow):
 
         self.reference_combo.setCurrentText(self._controller.project.reference_stem_id)
         self.reference_combo.blockSignals(False)
+
+    def _on_stem_name_clicked(self, stem_id: str) -> None:
+        """Enlarge that stem's row to half the tracks area (the others share
+        the rest); clicking the enlarged one again restores equal heights.
+        Purely a view choice -- independent of the reference stem."""
+        self._focused_stem_id = None if self._focused_stem_id == stem_id else stem_id
+        self._apply_row_focus()
+
+    def _apply_row_focus(self) -> None:
+        others = len(self._track_views) - 1
+        for stem_id, view in self._track_views.items():
+            focused = stem_id == self._focused_stem_id
+            # stretch factors split the height: focused = all others combined
+            self._tracks_layout.setStretchFactor(view, max(1, others) if focused else 1)
+            view.stem_panel.set_focused(focused)
 
     def _timeline_end_sec(self) -> float:
         """Where the last stem ends on the project timeline."""
